@@ -1,0 +1,6 @@
+{
+  "name": "Wispwright: Fortress Defense",
+  "description": "A mobile-first 2D physics siege and fortress-defense game prototype set in an alchemical fantasy world. Construct defenses to shield elemental wisps and test structural stability.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
