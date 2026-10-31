@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import {
+  ConstructionRelevanceTelemetry,
   GameMode,
   InventoryCategory,
   LevelState,
@@ -33,6 +34,7 @@ import {
   Layers,
   Film,
   Sparkles,
+  CheckSquare,
 } from 'lucide-react';
 
 interface DiagnosticPanelProps {
@@ -60,6 +62,9 @@ interface DiagnosticPanelProps {
   physicsDiagnostics: DetailedPhysicsDiagnostics | null;
   targetingDiagnostics?: TargetingDiagnostics | null;
   presentationDiagnostics?: PresentationDiagnostics | null;
+  constructionTelemetry?: ConstructionRelevanceTelemetry;
+  devBypassTutorialRequirements?: boolean;
+  onToggleDevBypassTutorialRequirements?: () => void;
   distancePreset?: DistancePreset;
   onSelectDistancePreset?: (preset: DistancePreset) => void;
   cameraFramingMode?: string;
@@ -88,6 +93,22 @@ interface DiagnosticPanelProps {
   onToggleReplay?: () => void;
   onClearPresentationSettings?: () => void;
   onClearReplayData?: () => void;
+  // Phase 5 Bullseye Taunt Diagnostics & Developer Controls (8)
+  bullseyeConflictDiagnostic?: string | null;
+  lastTargetComparison?: {
+    ordinaryTargetId: string;
+    bullseyeTargetId: string;
+    overrideActive: boolean;
+    reachable: boolean;
+  } | null;
+  onDevGrantBullseye?: () => void;
+  onDevPlaceBullseyeReinforced?: () => void;
+  onDevPlaceBullseyeExposedDecoy?: () => void;
+  onDevPlaceBullseyeUnreachable?: () => void;
+  onDevResetBullseyeState?: () => void;
+  onDevForceAttack1BullseyeTest?: () => void;
+  onDevForceAttack2ReinforcementRetargetTest?: () => void;
+  onDevCompareOrdinaryVsBullseyeTarget?: () => void;
 }
 
 export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
@@ -113,6 +134,9 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
   physicsDiagnostics,
   targetingDiagnostics,
   presentationDiagnostics,
+  constructionTelemetry,
+  devBypassTutorialRequirements = false,
+  onToggleDevBypassTutorialRequirements,
   distancePreset = 'STANDARD',
   onSelectDistancePreset,
   cameraFramingMode = 'CONSTRUCTION_CAMERA',
@@ -139,8 +163,19 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
   onToggleReplay,
   onClearPresentationSettings,
   onClearReplayData,
+  bullseyeConflictDiagnostic,
+  lastTargetComparison,
+  onDevGrantBullseye,
+  onDevPlaceBullseyeReinforced,
+  onDevPlaceBullseyeExposedDecoy,
+  onDevPlaceBullseyeUnreachable,
+  onDevResetBullseyeState,
+  onDevForceAttack1BullseyeTest,
+  onDevForceAttack2ReinforcementRetargetTest,
+  onDevCompareOrdinaryVsBullseyeTarget,
 }) => {
   const [devControlsExpanded, setDevControlsExpanded] = useState(false);
+  const [bullseyeControlsExpanded, setBullseyeControlsExpanded] = useState(true);
   const [presControlsExpanded, setPresControlsExpanded] = useState(true);
   const [presDiagExpanded, setPresDiagExpanded] = useState(true);
 
@@ -619,6 +654,189 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
           </div>
         </div>
 
+        {/* 4B. Level 1 Construction Relevance Telemetry (10 Fields) & Dev No-Build Bypass */}
+        {constructionTelemetry && (
+          <div className="border-t border-emerald-900/60 pt-1.5">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-300">
+                <CheckSquare className="w-3 h-3 text-emerald-400" />
+                <span>CONSTRUCTION RELEVANCE TELEMETRY (10 FIELDS)</span>
+              </div>
+              <button
+                onClick={onToggleDevBypassTutorialRequirements}
+                className={`px-1.5 py-0.5 rounded text-[8.5px] font-bold border cursor-pointer transition-all ${
+                  devBypassTutorialRequirements
+                    ? 'bg-amber-600 text-white border-amber-400'
+                    : 'bg-slate-800 hover:bg-slate-700 text-amber-200 border-slate-700'
+                }`}
+                title="Developer No-Build Test Bypass: Allow Begin Siege without completing tutorial checklist"
+              >
+                {devBypassTutorialRequirements
+                  ? 'Bypass Tutorial Requirements: ON'
+                  : 'Bypass Tutorial Requirements'}
+              </button>
+            </div>
+
+            <div className="bg-slate-900/90 rounded p-1.5 space-y-0.5 text-[9.5px] border border-emerald-950/60">
+              <div className="flex justify-between">
+                <span className="text-slate-400">1. Player Pieces Placed (Pre-Atk1):</span>
+                <span className="text-emerald-300 font-bold">
+                  {constructionTelemetry.playerPiecesPlacedBeforeAttack1}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">2. Material Types Placed:</span>
+                <span className="text-amber-300 truncate max-w-[175px]">
+                  {constructionTelemetry.materialTypesPlacedBeforeAttack1.length > 0
+                    ? constructionTelemetry.materialTypesPlacedBeforeAttack1.join(', ')
+                    : 'none'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">3. Pieces Retained in Reserve:</span>
+                <span className="text-cyan-300 font-bold">
+                  {constructionTelemetry.piecesRetainedInReserveBeforeAttack1}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">4. Checklist (Bm/Blk/Sup/Stb):</span>
+                <span className="text-emerald-200 font-bold">
+                  {constructionTelemetry.tutorialChecklistStatus.placedBeam ? 'Y' : 'N'}/
+                  {constructionTelemetry.tutorialChecklistStatus.placedBlock ? 'Y' : 'N'}/
+                  {constructionTelemetry.tutorialChecklistStatus.hasSupportedConnection ? 'Y' : 'N'}/
+                  {constructionTelemetry.tutorialChecklistStatus.stabilityTested ? 'Y' : 'N'} (
+                  {constructionTelemetry.tutorialChecklistStatus.isComplete
+                    ? 'COMPLETE'
+                    : 'INCOMPLETE'}
+                  )
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">5. Stability Test Completed:</span>
+                <span className="text-amber-200 font-bold">
+                  {constructionTelemetry.stabilityTestCompleted ? 'TRUE' : 'FALSE'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">6-7. Wisps (After Atk1 / Atk2):</span>
+                <span className="text-emerald-300 font-bold">
+                  {constructionTelemetry.wispsAfterAttack1 ?? '---'} /{' '}
+                  {constructionTelemetry.wispsAfterAttack2 ?? '---'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">8. Final Result Band:</span>
+                <span className="text-cyan-300 font-bold">
+                  {constructionTelemetry.finalResultBand || 'PENDING'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">9-10. Tut Completion / Dev Bypass:</span>
+                <span className="text-purple-300 font-bold">
+                  Awarded: {constructionTelemetry.tutorialCompletionAwarded ? 'TRUE' : 'FALSE'} ·
+                  Bypass: {constructionTelemetry.noBuildDevBypassUsed ? 'TRUE' : 'FALSE'}
+                </span>
+              </div>
+
+              {/* 16 Required Authoritative Tutorial & Guided Placement Diagnostics */}
+              {constructionTelemetry.authoritativeTutorialState && (
+                <div className="border-t border-emerald-800/60 pt-1 mt-1 space-y-0.5">
+                  <div className="text-[9.5px] font-bold text-amber-300">
+                    AUTHORITATIVE TUTORIAL &amp; REVISION TELEMETRY (16 FIELDS)
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">1. Guided Step:</span>
+                    <span className="text-cyan-300 font-bold">
+                      {constructionTelemetry.authoritativeTutorialState.currentGuidedStep}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">2-4. Beam / Block / Support:</span>
+                    <span className="text-emerald-300 font-bold">
+                      {constructionTelemetry.authoritativeTutorialState.beamPlaced ? 'Y' : 'N'} /{' '}
+                      {constructionTelemetry.authoritativeTutorialState.blockPlaced ? 'Y' : 'N'} /{' '}
+                      {constructionTelemetry.authoritativeTutorialState.supportedConnectionCreated
+                        ? 'Y'
+                        : 'N'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">5-6. Rev (Cur / Tested):</span>
+                    <span className="text-amber-200 font-bold">
+                      r{constructionTelemetry.authoritativeTutorialState.currentConstructionRevision}{' '}
+                      /{' '}
+                      {constructionTelemetry.authoritativeTutorialState.testedRevisionId !== null
+                        ? `r${constructionTelemetry.authoritativeTutorialState.testedRevisionId}`
+                        : 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">7-8. TestPassed / DesignAccepted:</span>
+                    <span className="text-emerald-300 font-bold">
+                      {constructionTelemetry.authoritativeTutorialState.stabilityTestPassed
+                        ? 'TRUE'
+                        : 'FALSE'}{' '}
+                      /{' '}
+                      {constructionTelemetry.authoritativeTutorialState.stableDesignAccepted
+                        ? 'TRUE'
+                        : 'FALSE'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">9-11. LessonDone / SiegeElig / Skip:</span>
+                    <span className="text-cyan-200 font-bold">
+                      {constructionTelemetry.authoritativeTutorialState.basicLessonComplete
+                        ? 'Y'
+                        : 'N'}{' '}
+                      / {constructionTelemetry.authoritativeTutorialState.siegeEligible ? 'Y' : 'N'}{' '}
+                      /{' '}
+                      {constructionTelemetry.authoritativeTutorialState.guidanceSkipped ? 'Y' : 'N'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">12. Highlighted Item ID:</span>
+                    <span className="text-amber-300 font-bold">
+                      {constructionTelemetry.authoritativeTutorialState.currentHighlightedItemId ||
+                        'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">13. Suggested Region:</span>
+                    <span className="text-slate-200 truncate max-w-[175px]">
+                      {constructionTelemetry.authoritativeTutorialState
+                        .currentSuggestedPlacementRegion
+                        ? `${constructionTelemetry.authoritativeTutorialState.currentSuggestedPlacementRegion.pieceType} @ (${constructionTelemetry.authoritativeTutorialState.currentSuggestedPlacementRegion.center.x},${constructionTelemetry.authoritativeTutorialState.currentSuggestedPlacementRegion.center.y})`
+                        : 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">14. Recompute Reason:</span>
+                    <span className="text-emerald-200 truncate max-w-[175px]">
+                      {
+                        constructionTelemetry.authoritativeTutorialState
+                          .lastChecklistRecomputationReason
+                      }
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">15. Last Transition:</span>
+                    <span className="text-purple-200 truncate max-w-[175px]">
+                      {constructionTelemetry.authoritativeTutorialState.lastTutorialTransition}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">16. Blocking Reason:</span>
+                    <span className="text-rose-300 font-bold truncate max-w-[175px]">
+                      {constructionTelemetry.authoritativeTutorialState
+                        .lastTutorialBlockingReason || 'NONE'}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 5. Collapsible Phase 3 Developer Gameplay Test Controls (9) */}
         <div className="border-t border-amber-900/60 pt-1.5">
           <button
@@ -697,6 +915,84 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
           )}
         </div>
 
+        {/* 5B. Collapsible Phase 5 Bullseye Taunt Developer Test Controls (8) */}
+        <div className="border-t border-rose-900/60 pt-1.5">
+          <button
+            onClick={() => setBullseyeControlsExpanded((prev) => !prev)}
+            className="w-full flex items-center justify-between text-[10px] font-bold text-rose-300 py-0.5 cursor-pointer"
+          >
+            <span className="flex items-center gap-1">
+              <Target className="w-3 h-3 text-rose-400" />
+              <span>PHASE 5 BULLSEYE TAUNT CONTROLS (8 ACTIONS)</span>
+            </span>
+            {bullseyeControlsExpanded ? (
+              <ChevronUp className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5" />
+            )}
+          </button>
+
+          {bullseyeControlsExpanded && (
+            <div className="grid grid-cols-2 gap-1 mt-1 bg-slate-900/90 p-1.5 rounded border border-rose-900/40">
+              <button
+                onClick={onDevGrantBullseye}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-rose-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                1. Grant Bullseye Block
+              </button>
+              <button
+                onClick={onDevPlaceBullseyeReinforced}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-emerald-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                2. Place Reinforced
+              </button>
+              <button
+                onClick={onDevPlaceBullseyeExposedDecoy}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                3. Place Exposed Decoy
+              </button>
+              <button
+                onClick={onDevPlaceBullseyeUnreachable}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-orange-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                4. Place Unreachable
+              </button>
+              <button
+                onClick={onDevResetBullseyeState}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                5. Reset Bullseye State
+              </button>
+              <button
+                onClick={onDevForceAttack1BullseyeTest}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-rose-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                6. Force Atk 1 Test
+              </button>
+              <button
+                onClick={onDevForceAttack2ReinforcementRetargetTest}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-purple-200 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                7. Force Atk 2 Retarget
+              </button>
+              <button
+                onClick={onDevCompareOrdinaryVsBullseyeTarget}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[9px] font-semibold cursor-pointer text-left truncate"
+              >
+                8. Compare Ordinary vs Taunt
+              </button>
+              {lastTargetComparison && (
+                <div className="col-span-2 bg-slate-950/90 rounded p-1 border border-slate-800 text-[8.5px] text-slate-300">
+                  Ord: <span className="text-cyan-300 font-bold">{lastTargetComparison.ordinaryTargetId}</span> ·
+                  Selected: <span className="text-rose-300 font-bold">{lastTargetComparison.bullseyeTargetId}</span> ·
+                  Override: {lastTargetComparison.overrideActive ? 'YES' : 'NO'}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* 6. Distance Preset Selector */}
         <div className="border-t border-slate-800/80 pt-1.5">
           <div className="flex items-center justify-between mb-1">
@@ -730,12 +1026,12 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
           </div>
         </div>
 
-        {/* 7. Ballistic Targeting & Live Physics Telemetry */}
+        {/* 7. Ballistic Targeting & Phase 5 Bullseye Diagnostics (15 Required Fields) */}
         {targetingDiagnostics && (
           <div className="border-t border-amber-900/60 pt-1.5">
             <div className="flex items-center gap-1 text-[10px] font-bold text-amber-300 mb-1">
               <Target className="w-3 h-3 text-amber-400" />
-              <span>BALLISTIC TARGETING</span>
+              <span>BALLISTIC TARGETING &amp; BULLSEYE TELEMETRY (15 FIELDS)</span>
             </div>
             <div className="bg-slate-900/90 rounded p-1.5 space-y-0.5 text-[9.5px]">
               <div className="flex justify-between">
@@ -766,6 +1062,57 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
                       ? `${actualFlightTime.toFixed(2)}s`
                       : '---'}
                 </span>
+              </div>
+              <div className="border-t border-slate-800 pt-1 mt-1 space-y-0.5">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">1-3. Bullseye ID/Inv/Cond:</span>
+                  <span className="text-rose-300 font-bold">
+                    {targetingDiagnostics.bullseyePieceId} ·{' '}
+                    {targetingDiagnostics.bullseyeInventoryStatus} ·{' '}
+                    {targetingDiagnostics.bullseyeCondition}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">4-6. Act / Trig / Exp:</span>
+                  <span className="text-amber-200 font-bold">
+                    Act:{targetingDiagnostics.bullseyeActive ? 'Y' : 'N'} · Trig:
+                    {targetingDiagnostics.bullseyeTriggered ? 'Y' : 'N'} · Exp:
+                    {targetingDiagnostics.bullseyeExpired ? 'Y' : 'N'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">7-9. Coords / Reach / Arcs:</span>
+                  <span className="text-cyan-300">
+                    {targetingDiagnostics.bullseyeWorldCoordinates
+                      ? `(${Math.round(targetingDiagnostics.bullseyeWorldCoordinates.x)},${Math.round(targetingDiagnostics.bullseyeWorldCoordinates.y)})`
+                      : 'none'}{' '}
+                    · R:{targetingDiagnostics.bullseyeReachableByCurrentAttacker ? 'Y' : 'N'} · #
+                    {targetingDiagnostics.validBullseyeTrajectoryCount}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">10-12. Override / Atk / Cancel:</span>
+                  <span className="text-emerald-300 truncate max-w-[175px]">
+                    Ov:{targetingDiagnostics.bullseyeOverrideSelected ? 'YES' : 'NO'} ·{' '}
+                    {targetingDiagnostics.attackIdConsumingBullseye || 'none'} ·{' '}
+                    {targetingDiagnostics.overrideCancellationReason || 'none'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">13-15. Imp / Dist / OrdTarget:</span>
+                  <span className="text-purple-300 truncate max-w-[175px]">
+                    {targetingDiagnostics.actualFirstImpactObject || 'none'} ·{' '}
+                    {targetingDiagnostics.distanceBetweenImpactAndBullseye !== null
+                      ? `${Math.round(targetingDiagnostics.distanceBetweenImpactAndBullseye)}px`
+                      : '---'}{' '}
+                    · {targetingDiagnostics.ordinaryTargetWithoutOverride || 'none'}
+                  </span>
+                </div>
+                {bullseyeConflictDiagnostic && (
+                  <div className="text-[8.5px] text-rose-400 font-bold">
+                    Conflict: {bullseyeConflictDiagnostic}
+                  </div>
+                )}
               </div>
             </div>
           </div>

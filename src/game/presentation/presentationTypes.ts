@@ -132,6 +132,7 @@ export interface PresentationEvent {
     wispId?: string;
     position?: Vector2;
     severity?: number;
+    isBullseyeOverride?: boolean;
   };
 }
 
@@ -141,6 +142,7 @@ export type StandardAttackerAnimState =
   | 'PROUD_CHEST_PUFF'
   | 'SPARK_FLOURISH'
   | 'WARMUP_HOP'
+  | 'BULLSEYE_ACK_OFFENDED'
   | 'LOAD_INTO_CRADLE'
   | 'AIM_LEAN_FORWARD'
   | 'LAUNCH_ANTICIPATION'
@@ -161,6 +163,7 @@ export type HeavyAttackerAnimState =
   | 'HEAVY_STEP_IN'
   | 'GROUND_THUMP'
   | 'ASSISTED_MOUNT'
+  | 'BULLSEYE_ACK_DELIGHTED'
   | 'LAUNCHER_CREAK_LOAD'
   | 'DEEP_COMPRESSION'
   | 'LAUNCHER_FULL_STRAIN'

@@ -101,6 +101,10 @@ export const DAMAGE_THRESHOLDS = {
     crackImpulse: 28.0,
     breakImpulse: 60.0,
   },
+  bullseye_block: {
+    crackImpulse: 28.0,
+    breakImpulse: 60.0,
+  },
   wisp: {
     minImpactImpulse: 3.5, // Contact threshold to disperse wisp
     minVelocity: 1.5,

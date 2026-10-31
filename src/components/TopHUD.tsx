@@ -26,6 +26,7 @@ interface TopHUDProps {
   undoCount: number;
   redoCount: number;
   snapping: boolean;
+  highlightSnap?: boolean;
   sampleUnlockActive?: boolean;
   isMuted?: boolean;
   onUndo: () => void;
@@ -45,6 +46,7 @@ export const TopHUD: React.FC<TopHUDProps> = ({
   undoCount,
   redoCount,
   snapping,
+  highlightSnap = false,
   sampleUnlockActive = false,
   isMuted = false,
   onUndo,
@@ -154,9 +156,11 @@ export const TopHUD: React.FC<TopHUDProps> = ({
           className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
             !isEditable
               ? 'bg-slate-900/40 border-slate-800 text-slate-600 cursor-not-allowed'
-              : snapping
-                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
-                : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-700'
+              : highlightSnap
+                ? 'bg-amber-500/30 border-amber-300 text-amber-100 ring-2 ring-amber-400 animate-pulse'
+                : snapping
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30'
+                  : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-700'
           }`}
           title={snapping ? 'Magnetic Snapping: ON' : 'Magnetic Snapping: OFF'}
           aria-label="Toggle Magnetic Snapping"

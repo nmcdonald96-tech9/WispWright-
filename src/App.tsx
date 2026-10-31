@@ -116,6 +116,7 @@ export default function App() {
         setStabilityReport({ ...report });
         if (report.isSettled) {
           setMode((prev) => (prev === 'TESTING_SIMULATION' ? 'SETTLED' : prev));
+          syncStateFromStore();
         }
       },
       () => {
@@ -226,6 +227,8 @@ export default function App() {
     if (gestureRef.current) {
       gestureRef.current.snappingEnabled = next;
     }
+    storeRef.current.setActiveDragTutorialContext(null, next);
+    syncStateFromStore();
     soundSynth.playSnap();
   };
 
@@ -266,6 +269,7 @@ export default function App() {
   const handleTestSiege = () => {
     if (!rendererRef.current) return;
     gestureRef.current?.completeOrCancelActiveDragSafely();
+    storeRef.current.clearBeginSiegeHighlight();
     const started = rendererRef.current.startSiegeTest(true);
     if (started) {
       setMode(rendererRef.current.getEffectiveMode());
@@ -280,6 +284,34 @@ export default function App() {
     setMode('TESTING_SIMULATION');
     rendererRef.current.setMode('TESTING_SIMULATION');
     setSelectedPiece(null);
+    syncStateFromStore();
+  };
+
+  const handleAcceptStableDesign = () => {
+    if (!rendererRef.current) return;
+    gestureRef.current?.completeOrCancelActiveDragSafely();
+    rendererRef.current.acceptStableDesign();
+    setMode('CONSTRUCTION');
+    setSelectedPiece(null);
+    setStabilityReport((prev) => ({ ...prev, isSimulating: false }));
+    soundSynth.playSnap();
+    syncStateFromStore();
+  };
+
+  const handleReturnToBuild = () => {
+    if (!rendererRef.current) return;
+    gestureRef.current?.completeOrCancelActiveDragSafely();
+    rendererRef.current.returnToBuildFromTest();
+    setMode('CONSTRUCTION');
+    setSelectedPiece(null);
+    setStabilityReport((prev) => ({ ...prev, isSimulating: false }));
+    syncStateFromStore();
+  };
+
+  const handleToggleSkipGuidance = () => {
+    const next = !storeRef.current.guidanceSkipped;
+    storeRef.current.setGuidanceSkipped(next);
+    syncStateFromStore();
   };
 
   const handleEnterReinforcement = () => {
@@ -421,6 +453,38 @@ export default function App() {
 
   const sc = rendererRef.current?.siegeController;
   const pd = rendererRef.current?.presentationDirector;
+  const authoritativeTutorial = storeRef.current.getAuthoritativeTutorialState(levelState);
+  const tutorialChecklist = storeRef.current.getTutorialChecklist(levelState);
+  const tutorialChecklistReady = Boolean(
+    authoritativeTutorial.siegeEligible || sc?.devBypassTutorialRequirements,
+  );
+  const needsStabilityTest = Boolean(
+    authoritativeTutorial.beamPlaced &&
+      authoritativeTutorial.blockPlaced &&
+      authoritativeTutorial.supportedConnectionCreated &&
+      !authoritativeTutorial.stabilityTestPassed,
+  );
+  const highlightInventoryFocus = Boolean(
+    sc?.checklistHighlightActive &&
+      (!authoritativeTutorial.beamPlaced || !authoritativeTutorial.blockPlaced),
+  );
+  const highlightedMaterial: MaterialType | null =
+    authoritativeTutorial.currentHighlightedItemId === 'wood_beam'
+      ? 'wood_beam'
+      : authoritativeTutorial.currentHighlightedItemId === 'wood_block'
+        ? 'wood_block'
+        : null;
+  const guidanceActive = Boolean(
+    !authoritativeTutorial.guidanceSkipped && !authoritativeTutorial.basicLessonComplete,
+  );
+  const liveConstructionTelemetry =
+    mode === 'CONSTRUCTION' ||
+    mode === 'INITIAL_CONSTRUCTION' ||
+    mode === 'CONSTRUCTION_READY' ||
+    mode === 'TESTING_SIMULATION' ||
+    mode === 'SETTLED'
+      ? sc?.buildLiveConstructionTelemetry(levelState)
+      : sc?.constructionTelemetry;
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#090d16] select-none touch-none">
@@ -440,6 +504,7 @@ export default function App() {
         undoCount={undoCount}
         redoCount={redoCount}
         snapping={snapping}
+        highlightSnap={authoritativeTutorial.currentHighlightedItemId === 'snap_toggle'}
         sampleUnlockActive={storeRef.current.unlockState.reinforcementReserveUnlocked}
         isMuted={presSettings.isMuted}
         onUndo={handleUndo}
@@ -462,6 +527,13 @@ export default function App() {
         deliveryGranted={storeRef.current.deliveryGranted}
         statusFeedback={statusFeedback}
         reloadNotice={sc?.reloadNotice ?? null}
+        bullseyeNotice={sc?.bullseyeNotice ?? null}
+        tutorialChecklist={tutorialChecklist}
+        authoritativeTutorial={authoritativeTutorial}
+        checklistHighlightActive={Boolean(sc?.checklistHighlightActive)}
+        tutorialGateWarning={sc?.tutorialGateWarning ?? null}
+        presentationMode={presSettings.presentationMode}
+        snapping={snapping}
         onAdvanceIntro={() => {
           pd?.recordSkip('OPENING_STEP');
           sc?.advanceOpeningSequence();
@@ -474,6 +546,7 @@ export default function App() {
         onAcknowledgeDelivery={handleAcknowledgeDelivery}
         onLaunchFinalAttack={handleLaunchFinalAttack}
         onTriggerTutorialIntro={() => sc?.startOpeningSequence()}
+        onToggleSkipGuidance={handleToggleSkipGuidance}
       />
 
       {/* 4. Floating Zoom, Recenter & Flight Camera Controls (Hidden during active First-Person POV) */}
@@ -532,8 +605,16 @@ export default function App() {
             reinforcementTimerSec={reinforcementTimerSec}
             reinforcementTimerDisabled={reinforcementTimerDisabled}
             reinforcementTimerPaused={reinforcementTimerPaused}
+            tutorialChecklistReady={tutorialChecklistReady}
+            needsStabilityTest={needsStabilityTest}
+            authoritativeTutorial={authoritativeTutorial}
+            isStabilityTestPassed={Boolean(
+              stabilityReport.isSettled && stabilityReport.fallenCount === 0,
+            )}
             onTestFortress={handleTestFortress}
             onTestSiege={handleTestSiege}
+            onAcceptStableDesign={handleAcceptStableDesign}
+            onReturnToBuild={handleReturnToBuild}
             onFinishReinforcement={handleFinishReinforcement}
             onLaunchFinalAttack={handleLaunchFinalAttack}
             onRestoreDesign={handleRetryDesign}
@@ -552,6 +633,9 @@ export default function App() {
             deliveredInventory={storeRef.current.deliveredInventory}
             isReinforcement={isReinforcement}
             disabled={false}
+            highlightFocus={highlightInventoryFocus}
+            highlightedMaterial={highlightedMaterial}
+            guidanceActive={guidanceActive}
             onStartDrag={handleStartDrag}
           />
         )}
@@ -636,6 +720,14 @@ export default function App() {
         physicsDiagnostics={rendererRef.current?.getPhysicsDiagnostics() || null}
         targetingDiagnostics={sc?.targetingDiagnostics || null}
         presentationDiagnostics={presDiag}
+        constructionTelemetry={liveConstructionTelemetry}
+        devBypassTutorialRequirements={Boolean(sc?.devBypassTutorialRequirements)}
+        onToggleDevBypassTutorialRequirements={() => {
+          if (sc) {
+            sc.setDevBypassTutorialRequirements(!sc.devBypassTutorialRequirements);
+            syncStateFromStore();
+          }
+        }}
         distancePreset={distancePreset}
         onSelectDistancePreset={(preset) => {
           setDistancePreset(preset);
@@ -734,6 +826,43 @@ export default function App() {
         onClearPresentationSettings={handleResetPresSettings}
         onClearReplayData={() => {
           pd?.clearReplayData();
+          syncStateFromStore();
+        }}
+        // Phase 5 Bullseye Taunt Diagnostics & Developer Controls
+        bullseyeConflictDiagnostic={storeRef.current.bullseyeConflictDiagnostic}
+        lastTargetComparison={sc?.lastTargetComparison ?? null}
+        onDevGrantBullseye={() => {
+          sc?.devGrantBullseyeBlock();
+          syncStateFromStore();
+        }}
+        onDevPlaceBullseyeReinforced={() => {
+          sc?.devPlaceBullseyeReinforced();
+          syncStateFromStore();
+        }}
+        onDevPlaceBullseyeExposedDecoy={() => {
+          sc?.devPlaceBullseyeExposedDecoy();
+          syncStateFromStore();
+        }}
+        onDevPlaceBullseyeUnreachable={() => {
+          sc?.devPlaceBullseyeUnreachable();
+          syncStateFromStore();
+        }}
+        onDevResetBullseyeState={() => {
+          sc?.devResetBullseyeState();
+          syncStateFromStore();
+        }}
+        onDevForceAttack1BullseyeTest={() => {
+          sc?.devForceAttack1BullseyeTest();
+          setMode(rendererRef.current?.getEffectiveMode() || mode);
+          syncStateFromStore();
+        }}
+        onDevForceAttack2ReinforcementRetargetTest={() => {
+          sc?.devForceAttack2ReinforcementRetargetTest();
+          setMode(rendererRef.current?.getEffectiveMode() || mode);
+          syncStateFromStore();
+        }}
+        onDevCompareOrdinaryVsBullseyeTarget={() => {
+          sc?.devCompareOrdinaryVsBullseyeTarget();
           syncStateFromStore();
         }}
       />

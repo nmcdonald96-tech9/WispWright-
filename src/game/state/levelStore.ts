@@ -3,16 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { INITIAL_LEVEL_STATE } from '../config';
+import { INITIAL_LEVEL_STATE, MATERIAL_CONFIGS, WORLD_CONFIG } from '../config';
+import { checkOBBOverlap, getOBBFromPiece } from '../math/geometry';
 import {
+  AuthoritativeTutorialState,
+  BullseyeInventoryStatus,
+  BullseyeLogicalState,
   ConstructionAction,
   GameMode,
+  GuidedTutorialStep,
   InventoryCategory,
   Level1Results,
   LevelState,
   MaterialType,
   PlacedPiece,
   SnapshotType,
+  SuggestedPlacementRegion,
+  TutorialChecklistState,
+  TutorialHighlightTargetId,
   UnlockState,
   Vector2,
 } from '../types';
@@ -20,6 +28,8 @@ import {
 const STORAGE_KEY = 'alchemical_fortress_phase1_save_v1';
 const META_STORAGE_KEY = 'alchemical_fortress_phase3_meta_v1';
 const UNLOCK_STORAGE_KEY = 'alchemical_fortress_phase3_unlock_v1';
+
+export const TUTORIAL_BULLSEYE_ID = 'bullseye_tutorial_1';
 
 export interface SavedSessionMeta {
   savedPhase: GameMode;
@@ -31,6 +41,20 @@ export interface SavedSessionMeta {
   guaranteedDeliveryUsed: number;
   snapshots: Record<SnapshotType, LevelState | null>;
   lastResults: Level1Results | null;
+  stabilityTestRun?: boolean;
+  stabilityTestRestoredOrAccepted?: boolean;
+  // Authoritative Tutorial & Revision Persistence
+  currentConstructionRevision?: number;
+  preTestRevisionId?: number | null;
+  testedRevisionId?: number | null;
+  stabilityPassedForRevisionId?: number | null;
+  acceptedRevisionId?: number | null;
+  guidanceSkipped?: boolean;
+  tutorialSkippedByDeveloper?: boolean;
+  completionPresented?: boolean;
+  beginSiegeHighlightOnce?: boolean;
+  unstableHint?: string | null;
+  currentGuidedStep?: GuidedTutorialStep;
 }
 
 function deepClone<T>(obj: T): T {
@@ -64,11 +88,35 @@ export class LevelStore {
     wood_beam: 0,
     wood_block: 0,
     stone_block: 0,
+    bullseye_block: 0,
   };
   public deliveredPieceIds: string[] = [];
   public reinforcementMaterialsUsed = 0;
   public guaranteedDeliveryUsed = 0;
   public lastResults: Level1Results | null = null;
+
+  // Phase 5 Bullseye conflict diagnostic
+  public bullseyeConflictDiagnostic: string | null = null;
+
+  // Level 1 Authoritative Tutorial & Construction Revision state
+  public stabilityTestRun = false;
+  public stabilityTestRestoredOrAccepted = false;
+  public currentConstructionRevision = 1;
+  public preTestRevisionId: number | null = null;
+  public testedRevisionId: number | null = null;
+  public stabilityPassedForRevisionId: number | null = null;
+  public acceptedRevisionId: number | null = null;
+  public guidanceSkipped = false;
+  public tutorialSkippedByDeveloper = false;
+  public completionPresented = false;
+  public beginSiegeHighlightOnce = false;
+  public unstableHint: string | null = null;
+  public beamSelectedInInventory = false;
+  public activeDragPieceType: MaterialType | null = null;
+  public snappingEnabledForTutorial = true;
+  public lastChecklistRecomputationReason = 'INITIAL_LOAD';
+  public lastTutorialTransition = 'NONE -> STEP_1_SELECT_BEAM';
+  private previousGuidedStep: GuidedTutorialStep = 'STEP_1_SELECT_BEAM';
 
   // Tutorial & Sample Unlock state
   public unlockState: UnlockState = {
@@ -83,6 +131,7 @@ export class LevelStore {
     this.state = this.loadFromStorage();
     this.loadUnlockState();
     this.loadSessionMeta();
+    this.validatePersistedTutorialAgainstDesign();
   }
 
   public getState(): LevelState {
@@ -100,6 +149,519 @@ export class LevelStore {
     this.saveToStorage();
     this.saveSessionMeta();
     this.listeners.forEach((fn) => fn());
+  }
+
+  private incrementConstructionRevision(reason: string): void {
+    if (!this.isReinforcementMode) {
+      this.currentConstructionRevision++;
+      this.unstableHint = null;
+      this.beginSiegeHighlightOnce = false;
+      this.lastChecklistRecomputationReason = reason;
+    }
+  }
+
+  // --- Level 1 Authoritative Tutorial State & Checklist ---
+
+  public isPieceInsideBuildZone(piece: PlacedPiece): boolean {
+    const bz = WORLD_CONFIG.buildZone;
+    return (
+      piece.position.x >= bz.minX - 45 &&
+      piece.position.x <= bz.maxX + 45 &&
+      piece.position.y >= bz.minY - 45 &&
+      piece.position.y <= WORLD_CONFIG.groundY + 20
+    );
+  }
+
+  public getPlayerPlacedPieces(customState?: LevelState): PlacedPiece[] {
+    const target = customState ?? this.state;
+    return target.pieces.filter(
+      (p) =>
+        !p.isPrebuilt &&
+        p.condition !== 'LOST' &&
+        p.position.y < target.lossBoundaryY &&
+        this.isPieceInsideBuildZone(p),
+    );
+  }
+
+  private getPieceHalfExtents(piece: PlacedPiece): { hx: number; hy: number } {
+    const cfg = MATERIAL_CONFIGS[piece.type];
+    const cos = Math.abs(Math.cos(piece.rotation));
+    const sin = Math.abs(Math.sin(piece.rotation));
+    const hx = (cfg.width * cos + cfg.height * sin) / 2;
+    const hy = (cfg.width * sin + cfg.height * cos) / 2;
+    return { hx, hy };
+  }
+
+  private arePiecesInSupportContact(a: PlacedPiece, b: PlacedPiece): boolean {
+    // Reject if pieces physically overlap
+    const obbA = getOBBFromPiece(a);
+    const obbB = getOBBFromPiece(b);
+    if (checkOBBOverlap(obbA, obbB, 2.5)) {
+      return false;
+    }
+
+    const extA = this.getPieceHalfExtents(a);
+    const extB = this.getPieceHalfExtents(b);
+    const dx = Math.abs(a.position.x - b.position.x) - (extA.hx + extB.hx);
+    const dy = Math.abs(a.position.y - b.position.y) - (extA.hy + extB.hy);
+    // Within 16px tolerance on both axes without overlap constitutes a snapped or supported contact
+    return dx <= 16 && dy <= 16;
+  }
+
+  private computeSuggestedPlacementRegion(
+    step: GuidedTutorialStep,
+    playerPieces: PlacedPiece[],
+  ): SuggestedPlacementRegion | null {
+    if (step === 'STEP_1_SELECT_BEAM' || step === 'STEP_2_PLACE_BEAM') {
+      return {
+        id: 'region_western_roof_beam',
+        pieceType: 'wood_beam',
+        center: { x: 200, y: 672 },
+        width: 120,
+        height: 24,
+        toleranceRadius: 85,
+        label: 'Roof Span Support',
+        supportPoints: [
+          { x: 200, y: 684 },
+          { x: 400, y: 732 },
+          { x: 600, y: 684 },
+        ],
+      };
+    }
+
+    if (step === 'STEP_3_PLACE_BLOCK' || step === 'STEP_4_CREATE_SUPPORT') {
+      // Find placed beam if one exists to suggest a safe support location near it that never overlaps wisps
+      const beam = playerPieces.find((p) => p.type === 'wood_beam');
+      const suggestedX = beam && beam.position.x >= 500 ? 648 : 152;
+      const supportColX = beam && beam.position.x >= 500 ? 600 : 200;
+      return {
+        id: 'region_beam_support_block',
+        pieceType: 'wood_block',
+        center: { x: suggestedX, y: 756 },
+        width: 48,
+        height: 48,
+        toleranceRadius: 85,
+        label: 'Support Block Position',
+        supportPoints: [
+          { x: suggestedX, y: 780 },
+          { x: supportColX, y: 756 },
+          { x: supportColX, y: 684 },
+        ],
+      };
+    }
+
+    return null;
+  }
+
+  public getAuthoritativeTutorialState(customState?: LevelState): AuthoritativeTutorialState {
+    const target = customState ?? this.state;
+    const activePieces = target.pieces.filter(
+      (p) => p.condition !== 'LOST' && p.position.y < target.lossBoundaryY,
+    );
+    const playerPieces = activePieces.filter(
+      (p) => !p.isPrebuilt && this.isPieceInsideBuildZone(p),
+    );
+
+    // 1. BEAM PLACED: valid player-owned wooden beam in build zone
+    const beamPlaced = playerPieces.some((p) => p.type === 'wood_beam');
+
+    // 2. BLOCK PLACED: valid player-owned wooden or stone block in build zone (Bullseye Block does NOT satisfy this)
+    const blockPlaced = playerPieces.some(
+      (p) => p.type === 'wood_block' || p.type === 'stone_block',
+    );
+
+    // 3. SUPPORTED CONNECTION CREATED: valid non-overlapping snap, environmental anchor, or supported contact
+    let supportedConnectionCreated = false;
+    for (const p of playerPieces) {
+      if (p.attachedAnchorId) {
+        // Verify it doesn't overlap existing pieces
+        const obbP = getOBBFromPiece(p);
+        const overlapsAny = activePieces.some(
+          (other) => other.id !== p.id && checkOBBOverlap(obbP, getOBBFromPiece(other), 2.5),
+        );
+        if (!overlapsAny) {
+          supportedConnectionCreated = true;
+          break;
+        }
+      }
+      for (const other of activePieces) {
+        if (other.id === p.id) continue;
+        if (this.arePiecesInSupportContact(p, other)) {
+          const extP = this.getPieceHalfExtents(p);
+          const extOther = this.getPieceHalfExtents(other);
+          const pGrounded = p.position.y + extP.hy >= 748 || Boolean(p.attachedAnchorId);
+          const otherGrounded =
+            other.isPrebuilt ||
+            other.position.y + extOther.hy >= 748 ||
+            Boolean(other.attachedAnchorId);
+          if (pGrounded || otherGrounded) {
+            supportedConnectionCreated = true;
+            break;
+          }
+        }
+      }
+      if (supportedConnectionCreated) break;
+    }
+
+    // 4. STABILITY TEST PASSED & ACCEPTED FOR CURRENT REVISION
+    const revisionMatchesPassed =
+      this.stabilityPassedForRevisionId !== null &&
+      this.stabilityPassedForRevisionId === this.currentConstructionRevision;
+
+    const stabilityTestPassed =
+      revisionMatchesPassed &&
+      beamPlaced &&
+      blockPlaced &&
+      supportedConnectionCreated;
+
+    const stableDesignAccepted =
+      stabilityTestPassed &&
+      this.acceptedRevisionId !== null &&
+      this.acceptedRevisionId === this.currentConstructionRevision;
+
+    const basicLessonComplete =
+      beamPlaced &&
+      blockPlaced &&
+      supportedConnectionCreated &&
+      stabilityTestPassed &&
+      stableDesignAccepted;
+
+    const siegeEligible = Boolean(
+      basicLessonComplete || this.tutorialSkippedByDeveloper,
+    );
+
+    // 5. SEQUENTIAL GUIDED STEP (with out-of-order advancement to earliest incomplete requirement)
+    let currentGuidedStep: GuidedTutorialStep = 'STEP_1_SELECT_BEAM';
+    if (basicLessonComplete) {
+      currentGuidedStep = 'COMPLETE';
+    } else if (this.savedPhase === 'SETTLED') {
+      currentGuidedStep = 'STEP_6_ACCEPT_OR_REVISE';
+    } else if (this.savedPhase === 'TESTING_SIMULATION') {
+      currentGuidedStep = 'STEP_5_TEST_STABILITY';
+    } else if (!beamPlaced) {
+      if (this.activeDragPieceType === 'wood_beam' || this.beamSelectedInInventory) {
+        currentGuidedStep = 'STEP_2_PLACE_BEAM';
+      } else {
+        currentGuidedStep = 'STEP_1_SELECT_BEAM';
+      }
+    } else if (!blockPlaced) {
+      currentGuidedStep = 'STEP_3_PLACE_BLOCK';
+    } else if (!supportedConnectionCreated) {
+      currentGuidedStep = 'STEP_4_CREATE_SUPPORT';
+    } else if (!stabilityTestPassed) {
+      currentGuidedStep = 'STEP_5_TEST_STABILITY';
+    } else {
+      currentGuidedStep = 'STEP_6_ACCEPT_OR_REVISE';
+    }
+
+    if (currentGuidedStep !== this.previousGuidedStep) {
+      this.lastTutorialTransition = `${this.previousGuidedStep} -> ${currentGuidedStep}`;
+      this.previousGuidedStep = currentGuidedStep;
+    }
+
+    // 6. Highlighted UI item & blocking reason
+    let currentHighlightedItemId: TutorialHighlightTargetId = null;
+    if (!this.guidanceSkipped) {
+      switch (currentGuidedStep) {
+        case 'STEP_1_SELECT_BEAM':
+        case 'STEP_2_PLACE_BEAM':
+          currentHighlightedItemId = 'wood_beam';
+          break;
+        case 'STEP_3_PLACE_BLOCK':
+          currentHighlightedItemId = 'wood_block';
+          break;
+        case 'STEP_4_CREATE_SUPPORT':
+          currentHighlightedItemId = this.snappingEnabledForTutorial ? 'wood_block' : 'snap_toggle';
+          break;
+        case 'STEP_5_TEST_STABILITY':
+          currentHighlightedItemId = 'test_stability';
+          break;
+        case 'STEP_6_ACCEPT_OR_REVISE':
+          currentHighlightedItemId = stabilityTestPassed ? 'accept_stable_design' : 'test_stability';
+          break;
+        case 'COMPLETE':
+          currentHighlightedItemId = this.beginSiegeHighlightOnce ? 'begin_siege' : null;
+          break;
+      }
+    } else if (this.beginSiegeHighlightOnce && basicLessonComplete) {
+      currentHighlightedItemId = 'begin_siege';
+    }
+
+    let lastTutorialBlockingReason: string | null = null;
+    if (!siegeEligible) {
+      if (!beamPlaced) {
+        lastTutorialBlockingReason = 'MISSING_BEAM: Place a Timber Beam inside the sanctuary.';
+      } else if (!blockPlaced) {
+        lastTutorialBlockingReason =
+          'MISSING_BLOCK: Place a Wood Block or Cut Stone Block (Bullseye Block does not satisfy this step).';
+      } else if (!supportedConnectionCreated) {
+        lastTutorialBlockingReason =
+          'MISSING_SUPPORT: Connect pieces to a bedrock anchor or supported column without overlapping.';
+      } else if (!stabilityTestPassed) {
+        if (
+          this.stabilityPassedForRevisionId !== null &&
+          this.stabilityPassedForRevisionId !== this.currentConstructionRevision
+        ) {
+          lastTutorialBlockingReason = `REVISION_STALE: Design modified (rev ${this.currentConstructionRevision} vs tested rev ${this.stabilityPassedForRevisionId}); re-run Test Stability.`;
+        } else if (this.unstableHint) {
+          lastTutorialBlockingReason = `UNSTABLE_DESIGN: ${this.unstableHint}`;
+        } else {
+          lastTutorialBlockingReason = 'UNTESTED_DESIGN: Run Test Stability to verify the shelter.';
+        }
+      } else if (!stableDesignAccepted) {
+        lastTutorialBlockingReason = 'UNACCEPTED_DESIGN: Select Accept Stable Design to lock readiness.';
+      }
+    }
+
+    const currentSuggestedPlacementRegion = this.guidanceSkipped
+      ? null
+      : this.computeSuggestedPlacementRegion(currentGuidedStep, playerPieces);
+
+    return {
+      tutorialStarted: true,
+      beamPlaced,
+      blockPlaced,
+      supportedConnectionCreated,
+      stabilityTestStarted: this.stabilityTestRun,
+      stabilityTestPassed,
+      stableDesignAccepted,
+      basicLessonComplete,
+      siegeEligible,
+      currentGuidedStep,
+      guidanceSkipped: this.guidanceSkipped,
+      tutorialSkippedByDeveloper: this.tutorialSkippedByDeveloper,
+      completionPresented: this.completionPresented,
+      currentConstructionRevision: this.currentConstructionRevision,
+      testedRevisionId: this.testedRevisionId,
+      stabilityPassedForRevisionId: this.stabilityPassedForRevisionId,
+      acceptedRevisionId: this.acceptedRevisionId,
+      currentHighlightedItemId,
+      currentSuggestedPlacementRegion,
+      lastChecklistRecomputationReason: this.lastChecklistRecomputationReason,
+      lastTutorialTransition: this.lastTutorialTransition,
+      lastTutorialBlockingReason,
+      beginSiegeHighlightOnce: this.beginSiegeHighlightOnce,
+      unstableHint: this.unstableHint,
+    };
+  }
+
+  public getTutorialChecklist(customState?: LevelState): TutorialChecklistState {
+    const target = customState ?? this.state;
+    const auth = this.getAuthoritativeTutorialState(target);
+    const playerPieces = this.getPlayerPlacedPieces(target);
+
+    const materialTypesSet = new Set<MaterialType>();
+    for (const p of playerPieces) {
+      materialTypesSet.add(p.type);
+    }
+
+    return {
+      placedBeam: auth.beamPlaced,
+      placedBlock: auth.blockPlaced,
+      hasSupportedConnection: auth.supportedConnectionCreated,
+      stabilityTested: auth.stabilityTestPassed && auth.stableDesignAccepted,
+      stabilityTestRun: auth.stabilityTestStarted,
+      stabilityTestRestoredOrAccepted: auth.stableDesignAccepted,
+      isComplete: auth.basicLessonComplete,
+      playerPiecesPlacedCount: playerPieces.length,
+      placedMaterialTypes: Array.from(materialTypesSet),
+    };
+  }
+
+  public setGuidanceSkipped(skipped: boolean): void {
+    this.guidanceSkipped = skipped;
+    this.lastChecklistRecomputationReason = skipped ? 'GUIDANCE_SKIPPED' : 'GUIDANCE_RESUMED';
+    this.notify();
+  }
+
+  public setTutorialSkippedByDeveloper(skipped: boolean): void {
+    this.tutorialSkippedByDeveloper = skipped;
+    this.lastChecklistRecomputationReason = skipped ? 'DEV_BYPASS_ON' : 'DEV_BYPASS_OFF';
+    this.notify();
+  }
+
+  public setActiveDragTutorialContext(
+    pieceType: MaterialType | null,
+    snappingEnabled = true,
+  ): void {
+    const changed =
+      this.activeDragPieceType !== pieceType ||
+      this.snappingEnabledForTutorial !== snappingEnabled ||
+      (pieceType === 'wood_beam' && !this.beamSelectedInInventory);
+    this.activeDragPieceType = pieceType;
+    this.snappingEnabledForTutorial = snappingEnabled;
+    if (pieceType === 'wood_beam') {
+      this.beamSelectedInInventory = true;
+    }
+    if (changed) {
+      this.lastChecklistRecomputationReason = pieceType
+        ? `DRAG_START_${pieceType.toUpperCase()}`
+        : 'DRAG_END';
+      this.listeners.forEach((fn) => fn());
+    }
+  }
+
+  public recordStabilityTestStarted(): void {
+    this.stabilityTestRun = true;
+    this.testedRevisionId = this.currentConstructionRevision;
+    this.unstableHint = null;
+    this.lastChecklistRecomputationReason = `STABILITY_TEST_STARTED_REV_${this.currentConstructionRevision}`;
+    this.notify();
+  }
+
+  public recordStabilityTestPassed(): void {
+    const auth = this.getAuthoritativeTutorialState();
+    this.stabilityTestRun = true;
+    this.testedRevisionId = this.currentConstructionRevision;
+    if (auth.beamPlaced && auth.blockPlaced && auth.supportedConnectionCreated) {
+      // Set exactly once per valid tested design revision
+      this.stabilityPassedForRevisionId = this.currentConstructionRevision;
+      this.unstableHint = null;
+      this.lastChecklistRecomputationReason = `STABILITY_TEST_PASSED_REV_${this.currentConstructionRevision}`;
+    } else {
+      this.stabilityPassedForRevisionId = null;
+      this.lastChecklistRecomputationReason = `STABILITY_SETTLED_INCOMPLETE_LESSON_REV_${this.currentConstructionRevision}`;
+    }
+    this.notify();
+  }
+
+  public recordStabilityTestFailed(hint?: string): void {
+    this.stabilityTestRun = true;
+    this.testedRevisionId = this.currentConstructionRevision;
+    this.stabilityPassedForRevisionId = null;
+    this.acceptedRevisionId = null;
+    this.stabilityTestRestoredOrAccepted = false;
+    this.unstableHint =
+      hint ||
+      'An unsupported piece shifted or fell under gravity. Brace overhanging spans on columns or bedrock.';
+    this.lastChecklistRecomputationReason = `STABILITY_TEST_FAILED_REV_${this.currentConstructionRevision}`;
+    this.notify();
+  }
+
+  public acceptStableDesign(): boolean {
+    // Ensure the current revision passed stability (or if called right after recordStabilityTestPassed)
+    if (this.stabilityPassedForRevisionId !== this.currentConstructionRevision) {
+      const auth = this.getAuthoritativeTutorialState();
+      if (auth.beamPlaced && auth.blockPlaced && auth.supportedConnectionCreated && this.stabilityTestRun) {
+        this.stabilityPassedForRevisionId = this.currentConstructionRevision;
+      } else {
+        return false;
+      }
+    }
+    this.acceptedRevisionId = this.currentConstructionRevision;
+    this.stabilityTestRestoredOrAccepted = true;
+    this.completionPresented = true;
+    this.beginSiegeHighlightOnce = true;
+    this.unstableHint = null;
+    this.lastChecklistRecomputationReason = `STABLE_DESIGN_ACCEPTED_REV_${this.currentConstructionRevision}`;
+    this.notify();
+    return true;
+  }
+
+  public recordStabilityTestRestoredOrAccepted(): void {
+    if (this.stabilityTestRun) {
+      const auth = this.getAuthoritativeTutorialState();
+      if (auth.beamPlaced && auth.blockPlaced && auth.supportedConnectionCreated) {
+        this.stabilityPassedForRevisionId = this.currentConstructionRevision;
+        this.acceptedRevisionId = this.currentConstructionRevision;
+        this.stabilityTestRestoredOrAccepted = true;
+        this.completionPresented = true;
+        this.beginSiegeHighlightOnce = true;
+      }
+      this.lastChecklistRecomputationReason = `STABILITY_TEST_ACCEPTED_REV_${this.currentConstructionRevision}`;
+      this.notify();
+    }
+  }
+
+  public clearBeginSiegeHighlight(): void {
+    if (this.beginSiegeHighlightOnce) {
+      this.beginSiegeHighlightOnce = false;
+      this.notify();
+    }
+  }
+
+  private validatePersistedTutorialAgainstDesign(): void {
+    const auth = this.getAuthoritativeTutorialState();
+    if (!auth.beamPlaced || !auth.blockPlaced || !auth.supportedConnectionCreated) {
+      this.stabilityPassedForRevisionId = null;
+      this.acceptedRevisionId = null;
+      this.stabilityTestRestoredOrAccepted = false;
+    }
+    this.lastChecklistRecomputationReason = 'RELOAD_VALIDATION';
+  }
+
+  // --- Phase 5 Bullseye Logical State ---
+
+  public getPlacedBullseyePiece(): PlacedPiece | null {
+    return this.state.pieces.find((p) => p.type === 'bullseye_block') || null;
+  }
+
+  public getBullseyeLogicalState(
+    reachableByCurrentAttacker = true,
+    validTrajectoryCount = 0,
+    overrideCancellationReason: string | null = null,
+  ): BullseyeLogicalState {
+    const piece = this.getPlacedBullseyePiece();
+    if (!piece) {
+      return {
+        pieceId: TUTORIAL_BULLSEYE_ID,
+        materialType: 'bullseye_block',
+        inventoryStatus: 'IN_RESERVE',
+        condition: 'INTACT',
+        position: null,
+        rotation: 0,
+        isPrebuilt: false,
+        active: false,
+        triggered: false,
+        expired: false,
+        reachableByCurrentAttacker: false,
+        validTrajectoryCount: 0,
+        consumedByAttackId: null,
+        overrideCancellationReason: overrideCancellationReason ?? 'BULLSEYE_IN_RESERVE',
+        conflictDiagnostic: this.bullseyeConflictDiagnostic,
+      };
+    }
+
+    const cond = piece.condition || 'INTACT';
+    const isBrokenOrLost =
+      cond === 'BROKEN' || cond === 'LOST' || piece.position.y >= this.state.lossBoundaryY;
+    const expired = Boolean(piece.bullseyeExpired);
+    const triggered = Boolean(piece.bullseyeTriggered);
+    const active = !isBrokenOrLost && !expired && piece.bullseyeActive !== false;
+
+    let inventoryStatus: BullseyeInventoryStatus = 'PLACED_ACTIVE';
+    if (cond === 'LOST' || piece.position.y >= this.state.lossBoundaryY) {
+      inventoryStatus = 'LOST_UNAVAILABLE';
+    } else if (cond === 'BROKEN') {
+      inventoryStatus = 'BROKEN_DEBRIS';
+    } else if (expired) {
+      inventoryStatus = 'PLACED_EXPIRED';
+    } else if (triggered) {
+      inventoryStatus = 'PLACED_TRIGGERED';
+    } else if (!reachableByCurrentAttacker) {
+      inventoryStatus = 'PLACED_UNREACHABLE';
+    } else {
+      inventoryStatus = 'PLACED_ACTIVE';
+    }
+
+    return {
+      pieceId: piece.id,
+      materialType: 'bullseye_block',
+      inventoryStatus,
+      condition: cond,
+      position: { ...piece.position },
+      rotation: piece.rotation,
+      isPrebuilt: piece.isPrebuilt,
+      active,
+      triggered,
+      expired,
+      reachableByCurrentAttacker: active ? reachableByCurrentAttacker : false,
+      validTrajectoryCount: active ? validTrajectoryCount : 0,
+      consumedByAttackId: piece.consumedByAttackId ?? null,
+      overrideCancellationReason:
+        overrideCancellationReason ?? piece.overrideCancellationReason ?? null,
+      conflictDiagnostic: this.bullseyeConflictDiagnostic,
+    };
   }
 
   // --- Piece Eligibility & Inventory Categorization ---
@@ -205,6 +767,16 @@ export class LevelStore {
       };
     }
 
+    // Expired Bullseye Block remains a normal intact stone block on the battlefield (can be moved/rotated if intact, but cannot be returned to reserve to reactivate its Taunt)
+    if (piece.type === 'bullseye_block' && piece.bullseyeExpired) {
+      return {
+        canMove: true,
+        canRotate: true,
+        canRemoveToInventory: false,
+        reason: 'Expired Bullseye Block: Taunt already spent; acts as normal stone block',
+      };
+    }
+
     return {
       canMove: true,
       canRotate: true,
@@ -214,7 +786,7 @@ export class LevelStore {
 
   // Total available reserve (starting reserve + delivered reserve)
   public getAvailableCount(type: MaterialType): number {
-    return (this.state.inventory[type] || 0);
+    return this.state.inventory[type] || 0;
   }
 
   public getTotalReserveCount(): number {
@@ -266,6 +838,19 @@ export class LevelStore {
   }
 
   public placePiece(piece: PlacedPiece, recordUndo = true): boolean {
+    // Enforce One Active Bullseye Limit: never allow more than one Bullseye Block on the battlefield
+    if (piece.type === 'bullseye_block') {
+      const existingBullseye = this.state.pieces.find(
+        (p) => p.type === 'bullseye_block' && p.condition !== 'LOST',
+      );
+      if (existingBullseye) {
+        this.bullseyeConflictDiagnostic =
+          'CONFLICT_REJECTED: Only one active Bullseye Block is permitted on the battlefield.';
+        return false;
+      }
+      this.bullseyeConflictDiagnostic = null;
+    }
+
     const currentCount = this.state.inventory[piece.type] ?? 0;
     if (currentCount <= 0) return false;
 
@@ -282,15 +867,36 @@ export class LevelStore {
       this.reinforcementMaterialsUsed++;
     }
 
+    const resolvedId =
+      piece.type === 'bullseye_block' && piece.id.startsWith('player_piece_')
+        ? TUTORIAL_BULLSEYE_ID
+        : piece.id;
+
     const enrichedPiece: PlacedPiece = {
       ...deepClone(piece),
+      id: resolvedId,
       condition: piece.condition ?? 'INTACT',
       ownership: fromDelivered ? 'GUARANTEED_DELIVERY' : (piece.ownership ?? 'PLAYER_OWNED'),
       source: fromDelivered ? 'GUARANTEED_DELIVERY' : (piece.source ?? 'STARTING_RESERVE'),
+      ...(piece.type === 'bullseye_block'
+        ? {
+            bullseyeActive: piece.bullseyeActive ?? true,
+            bullseyeTriggered: piece.bullseyeTriggered ?? false,
+            bullseyeExpired: piece.bullseyeExpired ?? false,
+            consumedByAttackId: piece.consumedByAttackId ?? null,
+            overrideCancellationReason: piece.overrideCancellationReason ?? null,
+          }
+        : {}),
     };
 
     // Preserve exact structure when in standard construction for byte-identical snapshot compatibility
-    if (!this.isReinforcementMode && !piece.condition && !piece.ownership && !piece.source) {
+    if (
+      !this.isReinforcementMode &&
+      piece.type !== 'bullseye_block' &&
+      !piece.condition &&
+      !piece.ownership &&
+      !piece.source
+    ) {
       this.state.pieces.push(deepClone(piece));
     } else {
       this.state.pieces.push(enrichedPiece);
@@ -305,6 +911,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.incrementConstructionRevision(`PLACE_PIECE_${piece.type.toUpperCase()}`);
     this.notify();
     return true;
   }
@@ -343,6 +950,10 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    if (piece.type === 'wood_beam' && !this.state.pieces.some((p) => !p.isPrebuilt && p.type === 'wood_beam')) {
+      this.beamSelectedInInventory = false;
+    }
+    this.incrementConstructionRevision(`REMOVE_PIECE_${piece.type.toUpperCase()}`);
     this.notify();
     return true;
   }
@@ -387,6 +998,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.incrementConstructionRevision(`MOVE_PIECE_${piece.type.toUpperCase()}`);
     this.notify();
     return true;
   }
@@ -416,6 +1028,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.incrementConstructionRevision(`ROTATE_PIECE_${piece.type.toUpperCase()}`);
     this.notify();
     return true;
   }
@@ -445,6 +1058,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.incrementConstructionRevision(`SET_ROTATION_${piece.type.toUpperCase()}`);
     this.notify();
     return true;
   }
@@ -539,6 +1153,7 @@ export class LevelStore {
     }
 
     activeRedo.push(action);
+    this.incrementConstructionRevision(`UNDO_${action.type}`);
     this.notify();
     return true;
   }
@@ -607,8 +1222,46 @@ export class LevelStore {
     }
 
     activeUndo.push(action);
+    this.incrementConstructionRevision(`REDO_${action.type}`);
     this.notify();
     return true;
+  }
+
+  // --- Bullseye Lifecycle Mutations ---
+
+  public markBullseyeTriggered(): void {
+    const piece = this.getPlacedBullseyePiece();
+    if (!piece || piece.bullseyeExpired) return;
+    piece.bullseyeTriggered = true;
+    piece.bullseyeActive = true;
+    this.saveToStorage();
+  }
+
+  public expireBullseyeForAttack(attackId: string): boolean {
+    const piece = this.getPlacedBullseyePiece();
+    if (!piece) return false;
+    if (piece.bullseyeExpired) return false; // Never process expiration twice
+    if (!piece.bullseyeTriggered) return false;
+    piece.bullseyeExpired = true;
+    piece.bullseyeActive = false;
+    piece.consumedByAttackId = attackId;
+    this.saveToStorage();
+    return true;
+  }
+
+  public cancelBullseyeBeforeLaunch(reason: string): void {
+    const piece = this.getPlacedBullseyePiece();
+    if (!piece) return;
+    piece.bullseyeActive = false;
+    piece.bullseyeTriggered = false;
+    piece.overrideCancellationReason = reason;
+    this.saveToStorage();
+  }
+
+  public recordBullseyeCancellationReason(reason: string | null): void {
+    const piece = this.getPlacedBullseyePiece();
+    if (!piece) return;
+    piece.overrideCancellationReason = reason;
   }
 
   // --- Named Snapshots & Restoration ---
@@ -634,11 +1287,12 @@ export class LevelStore {
 
   public captureSnapshot(): void {
     this.preTestSnapshot = deepClone(this.state);
+    this.preTestRevisionId = this.currentConstructionRevision;
     this.snapshots.INITIAL_DESIGN = deepClone(this.state);
     this.saveSessionMeta();
   }
 
-  public restorePreTestSnapshot(): boolean {
+  public restorePreTestSnapshot(preserveTestedRevision = true): boolean {
     const snap = this.preTestSnapshot ?? this.snapshots.INITIAL_DESIGN;
     if (!snap) return false;
     this.state = deepClone(snap);
@@ -646,10 +1300,17 @@ export class LevelStore {
     this.reinforcementUndoStack = [];
     this.reinforcementRedoStack = [];
     this.deliveryGranted = false;
-    this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0 };
+    this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0, bullseye_block: 0 };
     this.deliveredPieceIds = [];
     this.reinforcementMaterialsUsed = 0;
     this.guaranteedDeliveryUsed = 0;
+    this.bullseyeConflictDiagnostic = null;
+    if (preserveTestedRevision && this.preTestRevisionId !== null) {
+      this.currentConstructionRevision = this.preTestRevisionId;
+    } else {
+      this.currentConstructionRevision++;
+    }
+    this.lastChecklistRecomputationReason = 'RESTORE_PRE_TEST_SNAPSHOT';
     this.savedPhase = 'CONSTRUCTION';
     this.notify();
     return true;
@@ -659,13 +1320,14 @@ export class LevelStore {
     const snap = this.snapshots[type];
     if (!snap) return false;
     this.state = deepClone(snap);
+    this.bullseyeConflictDiagnostic = null;
 
     if (type === 'INITIAL_DESIGN' || type === 'LEVEL_TEMPLATE') {
       this.isReinforcementMode = false;
       this.reinforcementUndoStack = [];
       this.reinforcementRedoStack = [];
       this.deliveryGranted = false;
-      this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0 };
+      this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0, bullseye_block: 0 };
       this.deliveredPieceIds = [];
       this.reinforcementMaterialsUsed = 0;
       this.guaranteedDeliveryUsed = 0;
@@ -675,6 +1337,20 @@ export class LevelStore {
       this.undoStack = [];
       this.redoStack = [];
       this.preTestSnapshot = null;
+      this.preTestRevisionId = null;
+      this.currentConstructionRevision = 1;
+      this.testedRevisionId = null;
+      this.stabilityPassedForRevisionId = null;
+      this.acceptedRevisionId = null;
+      this.stabilityTestRun = false;
+      this.stabilityTestRestoredOrAccepted = false;
+      this.guidanceSkipped = false;
+      this.completionPresented = false;
+      this.beginSiegeHighlightOnce = false;
+      this.unstableHint = null;
+      this.beamSelectedInInventory = false;
+      this.activeDragPieceType = null;
+      this.lastChecklistRecomputationReason = 'RESTORE_LEVEL_TEMPLATE';
       this.snapshots = {
         LEVEL_TEMPLATE: deepClone(INITIAL_LEVEL_STATE),
         INITIAL_DESIGN: null,
@@ -683,6 +1359,14 @@ export class LevelStore {
         REINFORCEMENT_COMPLETE: null,
         FINAL_RESULT: null,
       };
+    } else if (type === 'INITIAL_DESIGN') {
+      if (this.preTestRevisionId !== null) {
+        this.currentConstructionRevision = this.preTestRevisionId;
+      }
+      this.lastChecklistRecomputationReason = 'RESTORE_INITIAL_DESIGN';
+    } else {
+      this.currentConstructionRevision++;
+      this.lastChecklistRecomputationReason = `RESTORE_SNAPSHOT_${type}`;
     }
 
     this.notify();
@@ -696,6 +1380,7 @@ export class LevelStore {
   public resetToDefault(): void {
     this.state = deepClone(INITIAL_LEVEL_STATE);
     this.preTestSnapshot = null;
+    this.preTestRevisionId = null;
     this.snapshots = {
       LEVEL_TEMPLATE: deepClone(INITIAL_LEVEL_STATE),
       INITIAL_DESIGN: null,
@@ -710,10 +1395,26 @@ export class LevelStore {
     this.reinforcementRedoStack = [];
     this.isReinforcementMode = false;
     this.deliveryGranted = false;
-    this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0 };
+    this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0, bullseye_block: 0 };
     this.deliveredPieceIds = [];
     this.reinforcementMaterialsUsed = 0;
     this.guaranteedDeliveryUsed = 0;
+    this.bullseyeConflictDiagnostic = null;
+    this.currentConstructionRevision = 1;
+    this.testedRevisionId = null;
+    this.stabilityPassedForRevisionId = null;
+    this.acceptedRevisionId = null;
+    this.stabilityTestRun = false;
+    this.stabilityTestRestoredOrAccepted = false;
+    this.guidanceSkipped = false;
+    this.completionPresented = false;
+    this.beginSiegeHighlightOnce = false;
+    this.unstableHint = null;
+    this.beamSelectedInInventory = false;
+    this.activeDragPieceType = null;
+    this.lastChecklistRecomputationReason = 'START_OVER_RESET';
+    this.lastTutorialTransition = 'RESET -> STEP_1_SELECT_BEAM';
+    this.previousGuidedStep = 'STEP_1_SELECT_BEAM';
     this.lastResults = null;
     this.savedPhase = 'CONSTRUCTION';
     this.notify();
@@ -739,7 +1440,19 @@ export class LevelStore {
 
   public clearTutorialState(): void {
     this.unlockState.tutorialCompleted = false;
+    this.stabilityTestRun = false;
+    this.stabilityTestRestoredOrAccepted = false;
+    this.testedRevisionId = null;
+    this.stabilityPassedForRevisionId = null;
+    this.acceptedRevisionId = null;
+    this.guidanceSkipped = false;
+    this.completionPresented = false;
+    this.beginSiegeHighlightOnce = false;
+    this.unstableHint = null;
+    this.beamSelectedInInventory = false;
+    this.lastChecklistRecomputationReason = 'CLEAR_TUTORIAL_STATE';
     this.saveUnlockState();
+    this.saveSessionMeta();
     this.listeners.forEach((fn) => fn());
   }
 
@@ -845,8 +1558,57 @@ export class LevelStore {
       };
     }
 
+    // 5. Reload during Stability Test (TESTING_SIMULATION) -> restore pre-test snapshot and return to CONSTRUCTION
+    if (phase === 'TESTING_SIMULATION') {
+      if (this.snapshots.INITIAL_DESIGN) {
+        this.state = deepClone(this.snapshots.INITIAL_DESIGN);
+      }
+      if (this.preTestRevisionId !== null) {
+        this.currentConstructionRevision = this.preTestRevisionId;
+      }
+      this.savedPhase = 'INITIAL_CONSTRUCTION';
+      this.lastChecklistRecomputationReason = 'RELOAD_DURING_STABILITY_TEST';
+      this.notify();
+      return {
+        recoveredPhase: 'INITIAL_CONSTRUCTION',
+        message: 'Reloaded during Stability Test: Restored pre-test editable design safely.',
+      };
+    }
+
+    // 6. Reload on Fortress Stable screen (SETTLED) -> preserve settled pass state so player can Accept or Return to Build
+    if (phase === 'SETTLED') {
+      if (this.snapshots.INITIAL_DESIGN) {
+        this.state = deepClone(this.snapshots.INITIAL_DESIGN);
+      }
+      if (this.preTestRevisionId !== null) {
+        this.currentConstructionRevision = this.preTestRevisionId;
+      }
+      this.validatePersistedTutorialAgainstDesign();
+      if (
+        this.stabilityPassedForRevisionId === this.currentConstructionRevision &&
+        this.acceptedRevisionId !== this.currentConstructionRevision
+      ) {
+        this.savedPhase = 'SETTLED';
+        this.lastChecklistRecomputationReason = 'RELOAD_ON_FORTRESS_STABLE';
+        this.notify();
+        return {
+          recoveredPhase: 'SETTLED',
+          message: 'Reloaded on Fortress Stable screen: Preserved passed stability state.',
+        };
+      }
+      this.savedPhase = 'INITIAL_CONSTRUCTION';
+      this.lastChecklistRecomputationReason = 'RELOAD_FROM_SETTLED_TO_BUILD';
+      this.notify();
+      return {
+        recoveredPhase: 'INITIAL_CONSTRUCTION',
+        message: 'Restored editable construction state.',
+      };
+    }
+
     // Default: Initial construction
+    this.validatePersistedTutorialAgainstDesign();
     this.savedPhase = 'INITIAL_CONSTRUCTION';
+    this.lastChecklistRecomputationReason = 'RELOAD_CONSTRUCTION';
     this.notify();
     return {
       recoveredPhase: 'INITIAL_CONSTRUCTION',
@@ -879,6 +1641,19 @@ export class LevelStore {
         guaranteedDeliveryUsed: this.guaranteedDeliveryUsed,
         snapshots: this.snapshots,
         lastResults: this.lastResults,
+        stabilityTestRun: this.stabilityTestRun,
+        stabilityTestRestoredOrAccepted: this.stabilityTestRestoredOrAccepted,
+        currentConstructionRevision: this.currentConstructionRevision,
+        preTestRevisionId: this.preTestRevisionId,
+        testedRevisionId: this.testedRevisionId,
+        stabilityPassedForRevisionId: this.stabilityPassedForRevisionId,
+        acceptedRevisionId: this.acceptedRevisionId,
+        guidanceSkipped: this.guidanceSkipped,
+        tutorialSkippedByDeveloper: this.tutorialSkippedByDeveloper,
+        completionPresented: this.completionPresented,
+        beginSiegeHighlightOnce: this.beginSiegeHighlightOnce,
+        unstableHint: this.unstableHint,
+        currentGuidedStep: this.previousGuidedStep,
       };
       localStorage.setItem(META_STORAGE_KEY, JSON.stringify(meta));
     } catch {
@@ -900,7 +1675,12 @@ export class LevelStore {
         this.deliveryGranted = parsed.deliveryGranted;
       }
       if (parsed.deliveredInventory) {
-        this.deliveredInventory = { ...parsed.deliveredInventory };
+        this.deliveredInventory = {
+          wood_beam: parsed.deliveredInventory.wood_beam ?? 0,
+          wood_block: parsed.deliveredInventory.wood_block ?? 0,
+          stone_block: parsed.deliveredInventory.stone_block ?? 0,
+          bullseye_block: parsed.deliveredInventory.bullseye_block ?? 0,
+        };
       }
       if (Array.isArray(parsed.deliveredPieceIds)) {
         this.deliveredPieceIds = [...parsed.deliveredPieceIds];
@@ -910,6 +1690,45 @@ export class LevelStore {
       }
       if (typeof parsed.guaranteedDeliveryUsed === 'number') {
         this.guaranteedDeliveryUsed = parsed.guaranteedDeliveryUsed;
+      }
+      if (typeof parsed.stabilityTestRun === 'boolean') {
+        this.stabilityTestRun = parsed.stabilityTestRun;
+      }
+      if (typeof parsed.stabilityTestRestoredOrAccepted === 'boolean') {
+        this.stabilityTestRestoredOrAccepted = parsed.stabilityTestRestoredOrAccepted;
+      }
+      if (typeof parsed.currentConstructionRevision === 'number') {
+        this.currentConstructionRevision = parsed.currentConstructionRevision;
+      }
+      if (parsed.preTestRevisionId !== undefined) {
+        this.preTestRevisionId = parsed.preTestRevisionId;
+      }
+      if (parsed.testedRevisionId !== undefined) {
+        this.testedRevisionId = parsed.testedRevisionId;
+      }
+      if (parsed.stabilityPassedForRevisionId !== undefined) {
+        this.stabilityPassedForRevisionId = parsed.stabilityPassedForRevisionId;
+      }
+      if (parsed.acceptedRevisionId !== undefined) {
+        this.acceptedRevisionId = parsed.acceptedRevisionId;
+      }
+      if (typeof parsed.guidanceSkipped === 'boolean') {
+        this.guidanceSkipped = parsed.guidanceSkipped;
+      }
+      if (typeof parsed.tutorialSkippedByDeveloper === 'boolean') {
+        this.tutorialSkippedByDeveloper = parsed.tutorialSkippedByDeveloper;
+      }
+      if (typeof parsed.completionPresented === 'boolean') {
+        this.completionPresented = parsed.completionPresented;
+      }
+      if (typeof parsed.beginSiegeHighlightOnce === 'boolean') {
+        this.beginSiegeHighlightOnce = parsed.beginSiegeHighlightOnce;
+      }
+      if (parsed.unstableHint !== undefined) {
+        this.unstableHint = parsed.unstableHint;
+      }
+      if (parsed.currentGuidedStep) {
+        this.previousGuidedStep = parsed.currentGuidedStep;
       }
       if (parsed.snapshots) {
         this.snapshots = {
@@ -987,7 +1806,11 @@ export class LevelStore {
     if (!Array.isArray(candidate.pieces)) return false;
     if (!candidate.inventory || typeof candidate.inventory !== 'object') return false;
 
-    const validMaterials: MaterialType[] = ['wood_beam', 'wood_block', 'stone_block'];
+    const validMaterials: MaterialType[] = ['wood_beam', 'wood_block', 'stone_block', 'bullseye_block'];
+    if (typeof candidate.inventory.bullseye_block !== 'number') {
+      const hasPlacedBullseye = candidate.pieces.some((p) => p && p.type === 'bullseye_block');
+      candidate.inventory.bullseye_block = hasPlacedBullseye ? 0 : 1;
+    }
     for (const mat of validMaterials) {
       const count = candidate.inventory[mat];
       if (typeof count !== 'number' || count < 0 || count > 25 || !Number.isInteger(count)) {

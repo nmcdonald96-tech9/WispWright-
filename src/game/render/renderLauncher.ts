@@ -126,16 +126,17 @@ export function renderLauncher(
       ctx.fill();
 
       // Outer alchemical target ring
-      ctx.strokeStyle = primaryColor;
-      ctx.lineWidth = 2.2;
+      const isBullseyeTarget = currentTarget.material === 'bullseye_block';
+      ctx.strokeStyle = isBullseyeTarget ? '#f43f5e' : primaryColor;
+      ctx.lineWidth = isBullseyeTarget ? 3.0 : 2.2;
       ctx.beginPath();
-      ctx.arc(0, 0, 20 * pulse, 0, Math.PI * 2);
+      ctx.arc(0, 0, (isBullseyeTarget ? 24 : 20) * pulse, 0, Math.PI * 2);
       ctx.stroke();
 
       // Inner bullseye diamond glyph
       ctx.save();
       ctx.rotate(animTime * 0.8);
-      ctx.strokeStyle = isHeavy ? '#fca5a5' : '#fde68a';
+      ctx.strokeStyle = isBullseyeTarget ? '#fde047' : isHeavy ? '#fca5a5' : '#fde68a';
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.moveTo(0, -10);
@@ -151,7 +152,7 @@ export function renderLauncher(
         ctx.save();
         ctx.rotate((c * Math.PI) / 2);
         const d = 24 * pulse;
-        ctx.fillStyle = primaryColor;
+        ctx.fillStyle = isBullseyeTarget ? '#f43f5e' : primaryColor;
         ctx.beginPath();
         ctx.moveTo(d, 0);
         ctx.lineTo(d + 6, -4);
@@ -306,14 +307,14 @@ export function renderLauncher(
       } else if (standardState === 'PROUD_CHEST_PUFF') {
         stageX = -12;
         stageY = cradleOffsetY - 4;
-      } else if (standardState === 'WARMUP_HOP') {
+      } else if (standardState === 'WARMUP_HOP' || standardState === 'BULLSEYE_ACK_OFFENDED') {
         stageY = cradleOffsetY - Math.abs(Math.sin(animTime * 14)) * 14;
       }
     } else {
       if (heavyState === 'HEAVY_STEP_IN') {
         stageX = -36;
         stageY = cradleOffsetY + 22;
-      } else if (heavyState === 'GROUND_THUMP') {
+      } else if (heavyState === 'GROUND_THUMP' || heavyState === 'BULLSEYE_ACK_DELIGHTED') {
         stageX = -18;
         stageY = cradleOffsetY + 16;
         // Cosmetic ground-thump dust shockwave ring

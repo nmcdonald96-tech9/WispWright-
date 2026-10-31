@@ -183,6 +183,19 @@ export const SiegeHUD: React.FC<SiegeHUDProps> = ({
             </button>
           </div>
 
+          {siegeController.bullseyeNotice &&
+            (mode === 'AIMING_PREVIEW' || mode === 'PROJECTILE_IN_FLIGHT') && (
+              <div
+                className={`mt-1 pt-1 border-t border-slate-800/80 text-[10px] font-bold truncate ${
+                  siegeController.bullseyeNotice.includes('no valid shot')
+                    ? 'text-amber-300'
+                    : 'text-rose-300'
+                }`}
+              >
+                🎯 {siegeController.bullseyeNotice}
+              </div>
+            )}
+
           {/* Post-Attack-1 Assessment Summary & Action Row */}
           {mode === 'ATTACK_RESOLVED' && !isReplaying && (
             <div className="mt-1.5 pt-1.5 border-t border-slate-800/90 flex flex-col gap-1.5">

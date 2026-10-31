@@ -41,7 +41,9 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
   onRetryDesign,
   onStartOver,
 }) => {
-  const [showUnlockView, setShowUnlockView] = useState(Boolean(results?.sampleUnlockGranted));
+  const [showUnlockView, setShowUnlockView] = useState(
+    Boolean(results?.sampleUnlockGranted && results?.tutorialCompletionAwarded),
+  );
 
   if (!summary && !results) return null;
 
@@ -49,6 +51,8 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
   const totalWisps = results?.totalWisps ?? summary?.totalWisps ?? 5;
   const wispsDispersed = results?.wispsDispersed ?? totalWisps - wispsStable;
   const survived = wispsStable >= 1;
+  const tutorialCompletionAwarded = Boolean(results?.tutorialCompletionAwarded);
+  const isNarrowSurvival = survived && wispsStable < 3;
   const classification =
     results?.classification ??
     (wispsStable === 5
@@ -69,7 +73,7 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center p-2.5 bg-slate-950/75 backdrop-blur-sm animate-in fade-in duration-150">
       <div className="w-full max-w-md max-h-[92vh] overflow-y-auto bg-slate-900 border border-slate-700/80 rounded-2xl p-4 shadow-2xl text-slate-100">
-        {showUnlockView && survived ? (
+        {showUnlockView && tutorialCompletionAwarded ? (
           /* Immediate Sample Unlock Presentation View */
           <div className="flex flex-col items-center text-center py-2 space-y-3">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500/30 to-amber-500/30 border border-purple-400/50 flex items-center justify-center shadow-lg">
@@ -119,12 +123,14 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
             <div className="flex items-center gap-3 mb-3">
               <div
                 className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
-                  survived
+                  tutorialCompletionAwarded
                     ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-400'
-                    : 'bg-rose-500/20 border border-rose-500/40 text-rose-400'
+                    : survived
+                      ? 'bg-amber-500/20 border border-amber-500/40 text-amber-400'
+                      : 'bg-rose-500/20 border border-rose-500/40 text-rose-400'
                 }`}
               >
-                {survived ? (
+                {tutorialCompletionAwarded ? (
                   <ShieldCheck className="w-6 h-6" />
                 ) : (
                   <ShieldAlert className="w-6 h-6" />
@@ -132,25 +138,51 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
               </div>
               <div className="min-w-0">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  {survived ? 'Level 1 Complete · Sanctuary Held' : 'Level 1 Outcome · Sanctuary Breached'}
+                  {tutorialCompletionAwarded
+                    ? 'Level 1 Complete · Sanctuary Held'
+                    : isNarrowSurvival
+                      ? 'Narrow Survival · Protect 3+ Wisps to Complete Level 1'
+                      : survived
+                        ? 'Sanctuary Survived · Complete Tutorial Checklist'
+                        : 'Level 1 Outcome · Sanctuary Breached'}
                 </div>
                 <h2 className="text-base sm:text-lg font-extrabold tracking-tight text-white truncate">
                   {classification}
                 </h2>
                 <p className="text-xs text-slate-400">
-                  {survived
+                  {tutorialCompletionAwarded
                     ? `${wispsStable} of ${totalWisps} elemental wisps survived both siege waves.`
-                    : 'All 5 elemental wisps were dispersed during the siege.'}
+                    : isNarrowSurvival
+                      ? `${wispsStable} of ${totalWisps} wisps held, but at least 3 wisps must remain stable to complete Level 1.`
+                      : survived
+                        ? `${wispsStable} of ${totalWisps} wisps survived.`
+                        : 'All 5 elemental wisps were dispersed during the siege.'}
                 </p>
               </div>
             </div>
 
-            {/* Failure Observation Guidance (when 0 wisps survive) */}
-            {!survived && results?.failureObservation && (
-              <div className="mb-3 bg-rose-950/60 border border-rose-500/50 rounded-xl p-2.5 flex items-start gap-2 text-xs text-rose-200">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            {/* Failure or Narrow Survival Structural Guidance */}
+            {(!tutorialCompletionAwarded && results?.failureObservation) && (
+              <div
+                className={`mb-3 rounded-xl p-2.5 flex items-start gap-2 text-xs border ${
+                  !survived
+                    ? 'bg-rose-950/60 border-rose-500/50 text-rose-200'
+                    : 'bg-amber-950/60 border-amber-500/50 text-amber-200'
+                }`}
+              >
+                <AlertTriangle
+                  className={`w-4 h-4 shrink-0 mt-0.5 ${
+                    !survived ? 'text-rose-400' : 'text-amber-400'
+                  }`}
+                />
                 <div>
-                  <div className="font-bold text-rose-300 mb-0.5">Structural Observation:</div>
+                  <div
+                    className={`font-bold mb-0.5 ${
+                      !survived ? 'text-rose-300' : 'text-amber-300'
+                    }`}
+                  >
+                    {!survived ? 'Structural Observation:' : 'Construction Hint:'}
+                  </div>
                   <div>{results.failureObservation}</div>
                 </div>
               </div>
@@ -202,28 +234,52 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
 
               {/* Reserve & Reinforcement Accounting */}
               {results && (
-                <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-800/80 text-[10px]">
-                  <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
-                    <span className="text-slate-400">Reserve Left</span>
-                    <span className="font-bold text-cyan-300">
-                      {results.totalReserveRemaining} pcs
-                    </span>
+                <>
+                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-800/80 text-[10px]">
+                    <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
+                      <span className="text-slate-400">Reserve Left</span>
+                      <span className="font-bold text-cyan-300">
+                        {results.totalReserveRemaining} pcs
+                      </span>
+                    </div>
+                    <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
+                      <span className="text-slate-400">Reinforced Used</span>
+                      <span className="font-bold text-amber-300">
+                        {results.reinforcementMaterialsUsed} pcs
+                      </span>
+                    </div>
+                    <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
+                      <span className="text-slate-400">Mentor Supply</span>
+                      <span className="font-bold text-emerald-300">
+                        {results.guaranteedDeliveryGranted
+                          ? `Granted (${results.guaranteedDeliveryUsed} used)`
+                          : 'Unused'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
-                    <span className="text-slate-400">Reinforced Used</span>
-                    <span className="font-bold text-amber-300">
-                      {results.reinforcementMaterialsUsed} pcs
-                    </span>
+
+                  {/* Phase 5 Bullseye Block Summary */}
+                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-800/80 text-[10px]">
+                    <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
+                      <span className="text-slate-400">Bullseye used:</span>
+                      <span className="font-bold text-rose-300">
+                        {results.bullseyeUsed ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
+                      <span className="text-slate-400">Bullseye target honored:</span>
+                      <span className="font-bold text-amber-300">
+                        {results.bullseyeTargetHonored ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
+                      <span className="text-slate-400">Bullseye survived:</span>
+                      <span className="font-bold text-emerald-300">
+                        {results.bullseyeSurvived ? 'Yes' : 'No'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="bg-slate-900/70 rounded px-2 py-1 flex flex-col">
-                    <span className="text-slate-400">Mentor Supply</span>
-                    <span className="font-bold text-emerald-300">
-                      {results.guaranteedDeliveryGranted
-                        ? `Granted (${results.guaranteedDeliveryUsed} used)`
-                        : 'Unused'}
-                    </span>
-                  </div>
-                </div>
+                </>
               )}
             </div>
 

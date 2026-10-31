@@ -3,9 +3,36 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type MaterialType = 'wood_beam' | 'wood_block' | 'stone_block';
+export type MaterialType = 'wood_beam' | 'wood_block' | 'stone_block' | 'bullseye_block';
 
 export type PieceCondition = 'INTACT' | 'CRACKED' | 'BROKEN' | 'LOST';
+
+export type BullseyeInventoryStatus =
+  | 'IN_RESERVE'
+  | 'PLACED_ACTIVE'
+  | 'PLACED_TRIGGERED'
+  | 'PLACED_EXPIRED'
+  | 'PLACED_UNREACHABLE'
+  | 'BROKEN_DEBRIS'
+  | 'LOST_UNAVAILABLE';
+
+export interface BullseyeLogicalState {
+  pieceId: string;
+  materialType: 'bullseye_block';
+  inventoryStatus: BullseyeInventoryStatus;
+  condition: PieceCondition;
+  position: Vector2 | null;
+  rotation: number;
+  isPrebuilt: boolean;
+  active: boolean;
+  triggered: boolean;
+  expired: boolean;
+  reachableByCurrentAttacker: boolean;
+  validTrajectoryCount: number;
+  consumedByAttackId: string | null;
+  overrideCancellationReason: string | null;
+  conflictDiagnostic: string | null;
+}
 
 export type PieceOwnership =
   | 'PREBUILT_FIXED'
@@ -81,8 +108,92 @@ export interface MasteryCriterion {
   achieved: boolean;
 }
 
+export type GuidedTutorialStep =
+  | 'STEP_1_SELECT_BEAM'
+  | 'STEP_2_PLACE_BEAM'
+  | 'STEP_3_PLACE_BLOCK'
+  | 'STEP_4_CREATE_SUPPORT'
+  | 'STEP_5_TEST_STABILITY'
+  | 'STEP_6_ACCEPT_OR_REVISE'
+  | 'COMPLETE';
+
+export type TutorialHighlightTargetId =
+  | MaterialType
+  | 'test_stability'
+  | 'accept_stable_design'
+  | 'begin_siege'
+  | 'snap_toggle'
+  | null;
+
+export interface SuggestedPlacementRegion {
+  id: string;
+  pieceType: MaterialType;
+  center: Vector2;
+  width: number;
+  height: number;
+  toleranceRadius: number;
+  label: string;
+  supportPoints: Vector2[];
+}
+
+export interface AuthoritativeTutorialState {
+  tutorialStarted: boolean;
+  beamPlaced: boolean;
+  blockPlaced: boolean;
+  supportedConnectionCreated: boolean;
+  stabilityTestStarted: boolean;
+  stabilityTestPassed: boolean;
+  stableDesignAccepted: boolean;
+  basicLessonComplete: boolean;
+  siegeEligible: boolean;
+  currentGuidedStep: GuidedTutorialStep;
+  guidanceSkipped: boolean;
+  tutorialSkippedByDeveloper: boolean;
+  completionPresented: boolean;
+  // Construction revision ownership
+  currentConstructionRevision: number;
+  testedRevisionId: number | null;
+  stabilityPassedForRevisionId: number | null;
+  acceptedRevisionId: number | null;
+  // Coaching & diagnostic state
+  currentHighlightedItemId: TutorialHighlightTargetId;
+  currentSuggestedPlacementRegion: SuggestedPlacementRegion | null;
+  lastChecklistRecomputationReason: string;
+  lastTutorialTransition: string;
+  lastTutorialBlockingReason: string | null;
+  beginSiegeHighlightOnce: boolean;
+  unstableHint: string | null;
+}
+
+export interface TutorialChecklistState {
+  placedBeam: boolean;
+  placedBlock: boolean;
+  hasSupportedConnection: boolean;
+  stabilityTestRun: boolean;
+  stabilityTestRestoredOrAccepted: boolean;
+  stabilityTested: boolean;
+  isComplete: boolean;
+  playerPiecesPlacedCount: number;
+  placedMaterialTypes: MaterialType[];
+}
+
+export interface ConstructionRelevanceTelemetry {
+  playerPiecesPlacedBeforeAttack1: number;
+  materialTypesPlacedBeforeAttack1: MaterialType[];
+  piecesRetainedInReserveBeforeAttack1: number;
+  tutorialChecklistStatus: TutorialChecklistState;
+  authoritativeTutorialState?: AuthoritativeTutorialState;
+  stabilityTestCompleted: boolean;
+  wispsAfterAttack1: number | null;
+  wispsAfterAttack2: number | null;
+  finalResultBand: ResultClassification | null;
+  tutorialCompletionAwarded: boolean;
+  noBuildDevBypassUsed: boolean;
+}
+
 export interface Level1Results {
   survived: boolean;
+  tutorialCompletionAwarded: boolean;
   classification: ResultClassification;
   wispsStable: number;
   wispsDispersed: number;
@@ -100,6 +211,12 @@ export interface Level1Results {
   masteryScore: number; // 0 to 3
   failureObservation: string | null;
   sampleUnlockGranted: boolean;
+  // Phase 5 Bullseye Tactical Summary
+  bullseyeUsed: boolean;
+  bullseyeTargetHonored: boolean;
+  bullseyeSurvived: boolean;
+  // Construction Relevance & Baseline Telemetry
+  constructionTelemetry?: ConstructionRelevanceTelemetry;
 }
 
 export interface UnlockState {
@@ -155,6 +272,12 @@ export interface PlacedPiece {
   impactSeverity?: number;
   ownership?: PieceOwnership;
   source?: PieceSource;
+  // Phase 5 Bullseye Taunt V1 lifecycle state
+  bullseyeActive?: boolean;
+  bullseyeTriggered?: boolean;
+  bullseyeExpired?: boolean;
+  consumedByAttackId?: string | null;
+  overrideCancellationReason?: string | null;
 }
 
 export interface WispEntity {

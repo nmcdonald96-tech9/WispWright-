@@ -245,7 +245,19 @@ export class PresentationDirector {
       }
       case 'TARGET_SELECTED': {
         soundSynth.playLauncherTension(payload?.attackerType === 'heavy');
-        if (payload?.attackerType === 'heavy') {
+        if (payload?.isBullseyeOverride) {
+          if (payload?.attackerType === 'heavy') {
+            this.setCaption(
+              'Grom: "Ooh, a painted target rune! Grom accepts the challenge."',
+              1.9,
+            );
+          } else {
+            this.setCaption(
+              'Pyrite Spark: "Did that painted block just WAVE at me?!"',
+              1.9,
+            );
+          }
+        } else if (payload?.attackerType === 'heavy') {
           this.setCaption(
             'Grom: "Nice pillars. Shame if I sat on \'em."',
             1.8,
@@ -604,7 +616,10 @@ export class PresentationDirector {
       } else if (siege.introTimer < totalIntro * 0.62) {
         this.setCameraMode('ATTACKER_INTRO_CAMERA', `attacker_${attackerType}`);
       } else {
-        this.emitEvent('TARGET_SELECTED', timeSec, siege.currentAttackIndex, { attackerType });
+        this.emitEvent('TARGET_SELECTED', timeSec, siege.currentAttackIndex, {
+          attackerType,
+          isBullseyeOverride: Boolean(siege.targetingDiagnostics?.bullseyeOverrideSelected),
+        });
         this.setCameraMode(
           'TARGET_REVEAL_CAMERA',
           siege.currentTarget?.id ?? 'target_zone',
@@ -1049,16 +1064,19 @@ export class PresentationDirector {
     if (effectiveMode === 'ENEMY_INTRODUCTION') {
       const dur = siege.currentAttack?.introDurationSec ?? 2.2;
       const ratio = Math.min(1, siege.introTimer / dur);
+      const isBullseye = Boolean(siege.targetingDiagnostics?.bullseyeOverrideSelected);
       if (isHeavy) {
         if (ratio < 0.28) this.heavyAttackerState = 'HEAVY_STEP_IN';
         else if (ratio < 0.55) this.heavyAttackerState = 'GROUND_THUMP';
-        else if (ratio < 0.82) this.heavyAttackerState = 'ASSISTED_MOUNT';
+        else if (ratio < 0.82)
+          this.heavyAttackerState = isBullseye ? 'BULLSEYE_ACK_DELIGHTED' : 'ASSISTED_MOUNT';
         else this.heavyAttackerState = 'HEAVY_READY_POSE';
         this.launcherStrain = Math.min(0.85, ratio * 0.9);
       } else {
         if (ratio < 0.25) this.standardAttackerState = 'INTRO_HOP_IN';
         else if (ratio < 0.52) this.standardAttackerState = 'PROUD_CHEST_PUFF';
-        else if (ratio < 0.78) this.standardAttackerState = 'WARMUP_HOP';
+        else if (ratio < 0.78)
+          this.standardAttackerState = isBullseye ? 'BULLSEYE_ACK_OFFENDED' : 'WARMUP_HOP';
         else this.standardAttackerState = 'LOAD_INTO_CRADLE';
         this.launcherStrain = Math.min(0.45, ratio * 0.5);
       }

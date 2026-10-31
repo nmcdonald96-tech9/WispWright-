@@ -85,12 +85,16 @@ export function computeGromRigPose(
     eyeOpenLeft = 1.35;
     eyeOpenRight = 1.35;
     mouthState = 'SURPRISE_O';
-  } else if (state === 'AIRBORNE_DELIGHT' || state === 'POST_IMPACT_TRIUMPH') {
+  } else if (
+    state === 'AIRBORNE_DELIGHT' ||
+    state === 'POST_IMPACT_TRIUMPH' ||
+    state === 'BULLSEYE_ACK_DELIGHTED'
+  ) {
     browTiltLeft = 0.22;
     browTiltRight = -0.22;
     browLiftY = -1.5;
-    eyeOpenLeft = 1.1;
-    eyeOpenRight = 1.1;
+    eyeOpenLeft = state === 'BULLSEYE_ACK_DELIGHTED' ? 0.82 : 1.1;
+    eyeOpenRight = state === 'BULLSEYE_ACK_DELIGHTED' ? 0.82 : 1.1;
     mouthState = 'GRIN';
   } else if (state === 'HEAVY_IMPACT_BRACE' || state === 'LAUNCHER_FULL_STRAIN') {
     browTiltLeft = 0.32;
@@ -118,15 +122,17 @@ export function computeGromRigPose(
   const leftArmAngle =
     state === 'GROUND_THUMP'
       ? 0.65
-      : state === 'AIRBORNE_DELIGHT'
+      : state === 'AIRBORNE_DELIGHT' || state === 'BULLSEYE_ACK_DELIGHTED'
         ? -0.7 + armWave
         : -0.2 + armWave;
   const rightArmAngle =
     state === 'GROUND_THUMP'
       ? -0.65
-      : state === 'AIRBORNE_DELIGHT'
-        ? 0.7 - armWave
-        : 0.2 - armWave;
+      : state === 'BULLSEYE_ACK_DELIGHTED'
+        ? -0.45
+        : state === 'AIRBORNE_DELIGHT'
+          ? 0.7 - armWave
+          : 0.2 - armWave;
 
   const lagScale = reducedMotion ? 0 : 0.35;
   const armorSecondaryLag = {
@@ -331,7 +337,7 @@ export function renderPyriteSparkBody(
   ctx.fill();
 
   // Expressive Oversized Eyes & Brows
-  const isSurprised = state === 'APEX_SURPRISE';
+  const isSurprised = state === 'APEX_SURPRISE' || state === 'BULLSEYE_ACK_OFFENDED';
   const isPanic = state === 'DESCENT_PANIC';
   const isBrace = state === 'IMPACT_BRACE' || state === 'EMBARRASSED_MISS';
   const isShrug = state === 'WEAK_HIT_SHRUG';
@@ -805,20 +811,40 @@ export function renderTrueFirstPersonPOV(
 
       // Primary Front Face Facing Approaching Projectile
       ctx.fillStyle =
-        p.type === 'stone_block'
-          ? '#64748b'
-          : p.type === 'wood_beam'
-            ? '#b45309'
-            : '#d97706';
+        p.type === 'bullseye_block'
+          ? '#4c1d3d'
+          : p.type === 'stone_block'
+            ? '#64748b'
+            : p.type === 'wood_beam'
+              ? '#b45309'
+              : '#d97706';
       ctx.strokeStyle =
         p.condition === 'CRACKED'
           ? '#f59e0b'
-          : p.type === 'stone_block'
-            ? '#94a3b8'
-            : '#fde68a';
+          : p.type === 'bullseye_block'
+            ? '#f43f5e'
+            : p.type === 'stone_block'
+              ? '#94a3b8'
+              : '#fde68a';
       ctx.lineWidth = Math.max(1, 1.8 * centerProj.scale);
       ctx.fillRect(x0, y0, sw, sh);
       ctx.strokeRect(x0, y0, sw, sh);
+
+      if (p.type === 'bullseye_block') {
+        const rOuter = Math.max(2, Math.min(sw, sh) * 0.36);
+        ctx.fillStyle = '#e11d48';
+        ctx.beginPath();
+        ctx.arc(centerProj.sx, centerProj.sy, rOuter, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fef3c7';
+        ctx.beginPath();
+        ctx.arc(centerProj.sx, centerProj.sy, rOuter * 0.62, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#be123c';
+        ctx.beginPath();
+        ctx.arc(centerProj.sx, centerProj.sy, rOuter * 0.32, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Visual cracks on damaged pieces (no developer text tags in Player mode)
       if (p.condition === 'CRACKED' || p.condition === 'BROKEN') {

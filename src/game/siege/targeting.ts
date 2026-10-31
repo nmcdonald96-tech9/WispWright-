@@ -52,6 +52,26 @@ export interface TrajectorySolution {
   rejectionReason?: string;
 }
 
+export interface DifficultyTuningConfig {
+  aimingErrorTolerance: number;
+  candidateScoringSophistication: 'basic' | 'tactical' | 'advanced';
+  maxCandidatesConsidered: number;
+  defenderInformationLevel: 'full' | 'partial' | 'minimal';
+  reinforcementFrequency: 'every_attack' | 'milestone' | 'none';
+  projectileSequenceComplexity: 'tutorial_pair' | 'multi_wave' | 'adaptive';
+  environmentalDifficulty: 'calm' | 'windy' | 'hazardous';
+}
+
+export const DEFAULT_LEVEL_1_DIFFICULTY_CONFIG: DifficultyTuningConfig = {
+  aimingErrorTolerance: 0,
+  candidateScoringSophistication: 'tactical',
+  maxCandidatesConsidered: 64,
+  defenderInformationLevel: 'full',
+  reinforcementFrequency: 'every_attack',
+  projectileSequenceComplexity: 'tutorial_pair',
+  environmentalDifficulty: 'calm',
+};
+
 export interface ScoredCandidate {
   candidate: TargetCandidate;
   totalScore: number;
@@ -93,6 +113,22 @@ export interface TargetingDiagnostics {
   fallbackUsed: boolean;
   rejectedTrajectoryCount: number;
   failureReason: string | null;
+  // Phase 5 Bullseye Block Diagnostics
+  bullseyePieceId: string;
+  bullseyeInventoryStatus: string;
+  bullseyeCondition: string;
+  bullseyeActive: boolean;
+  bullseyeTriggered: boolean;
+  bullseyeExpired: boolean;
+  bullseyeWorldCoordinates: Vector2 | null;
+  bullseyeReachableByCurrentAttacker: boolean;
+  validBullseyeTrajectoryCount: number;
+  bullseyeOverrideSelected: boolean;
+  attackIdConsumingBullseye: string | null;
+  overrideCancellationReason: string | null;
+  actualFirstImpactObject: string | null;
+  distanceBetweenImpactAndBullseye: number | null;
+  ordinaryTargetWithoutOverride: string | null;
 }
 
 // Matter.js discrete gravity acceleration per 60Hz tick
@@ -243,7 +279,7 @@ export function generateTargetCandidates(
     for (const wisp of activeWisps) {
       const d = Math.hypot(piece.position.x - wisp.position.x, piece.position.y - wisp.position.y);
       if (d < nearestWispDist) nearestWispDist = d;
-      if (d <= 180) wispsNearCount++;
+      if (d <= 220) wispsNearCount++;
     }
 
     // Check line of sight from launcher
@@ -308,7 +344,7 @@ export function generateTargetCandidates(
       const isCoverInFront =
         piece.position.x < wisp.position.x &&
         piece.position.x >= 140 &&
-        Math.abs(piece.position.y - wisp.position.y) < 85;
+        Math.abs(piece.position.y - wisp.position.y) < 110;
 
       if (isAbove || isCoverInFront) {
         isShielded = true;
@@ -376,7 +412,7 @@ function testTrajectoryArc(
 
     // 1. Terrain check: Check ground collision
     if (simY >= WORLD_CONFIG.groundY) {
-      if (simX < 140) {
+      if (simX < 140 && firstObstruction === 'none') {
         // Ground strike immediately in front of launcher before reaching fortress
         return {
           closestApproachDist: minApproachDist,
@@ -465,11 +501,18 @@ export function solveBallisticTrajectory(
   }
 
   // Sample speeds starting right above theoretical minimum so flight times are realistic and arcing
+  const vDiscriminant = Math.sqrt(GRAVITY_TICK * (Math.hypot(dx, dy) - dy));
   const speedCandidates = [
     Math.max(minAllowedSpeed, Math.min(maxAllowedSpeed, vMinTheoretical * 1.025)),
     Math.max(minAllowedSpeed, Math.min(maxAllowedSpeed, vMinTheoretical * 1.06)),
     Math.max(minAllowedSpeed, Math.min(maxAllowedSpeed, vMinTheoretical * 1.12)),
   ];
+  if (vDiscriminant > vMinTheoretical * 1.12 && vDiscriminant <= maxAllowedSpeed) {
+    speedCandidates.push(
+      Math.max(minAllowedSpeed, Math.min(maxAllowedSpeed, vDiscriminant * 1.03)),
+      Math.max(minAllowedSpeed, Math.min(maxAllowedSpeed, vDiscriminant * 1.08)),
+    );
+  }
   const testSpeeds = Array.from(new Set(speedCandidates)).filter((s) => s >= vMinTheoretical);
 
   let bestSolution: TrajectorySolution | null = null;
@@ -583,6 +626,10 @@ export function scoreCandidates(
       continue; // Filter out unreachable candidates
     }
 
+    // Treat expired bullseye_block identically to stone_block during normal scoring
+    const effectiveMaterial: MaterialType | undefined =
+      cand.material === 'bullseye_block' ? 'stone_block' : cand.material;
+
     // 2. Material & Role Suitability
     let materialRoleScore = 0;
     const isOccluded =
@@ -595,12 +642,12 @@ export function scoreCandidates(
     if (attackerType === 'standard') {
       // Standard attacker prioritizes exposed wooden pieces, upper rims, and exposed wisps
       if (cand.type === 'wisp_threat') {
-        materialRoleScore += 95; // Top tactical priority when an exposed wisp is detected
-      } else if (cand.material === 'wood_beam') {
+        materialRoleScore += 95; // High priority if a wisp is left unshielded
+      } else if (effectiveMaterial === 'wood_beam') {
         materialRoleScore += 35;
-      } else if (cand.material === 'wood_block') {
+      } else if (effectiveMaterial === 'wood_block') {
         materialRoleScore += 26;
-      } else if (cand.material === 'stone_block') {
+      } else if (effectiveMaterial === 'stone_block') {
         materialRoleScore += 12; // Avoids thick stone foundation when wood is available
       }
 
@@ -622,16 +669,16 @@ export function scoreCandidates(
       if (isOccluded) {
         materialRoleScore -= 45;
       }
-      if (cand.position.y > 740 && cand.material === 'stone_block') {
+      if (cand.position.y > 740 && effectiveMaterial === 'stone_block') {
         materialRoleScore -= 25;
       }
     } else {
       // Heavy attacker prioritizes lower supports, stone foundations, and structural columns
-      if (cand.material === 'stone_block') {
+      if (effectiveMaterial === 'stone_block') {
         materialRoleScore += 40; // Delights in crushing heavy stone foundations
-      } else if (cand.material === 'wood_block') {
+      } else if (effectiveMaterial === 'wood_block') {
         materialRoleScore += 20;
-      } else if (cand.material === 'wood_beam') {
+      } else if (effectiveMaterial === 'wood_beam') {
         materialRoleScore += 10;
       }
 
@@ -668,7 +715,7 @@ export function scoreCandidates(
       if (cand.nearestWispDist < 320) {
         wispProximityScore += Math.max(0, 30 * (1 - cand.nearestWispDist / 320));
       }
-      wispProximityScore += Math.min(36, cand.wispsNearCount * 10);
+      wispProximityScore += Math.min(24, cand.wispsNearCount * 8);
     }
 
     // 4. Structural Importance Score
@@ -693,7 +740,11 @@ export function scoreCandidates(
     if (solution.trajectoryType === 'low') {
       reachabilityScore += 8; // Slight preference for cleaner direct arc
     }
-    if (solution.expectedFirstObstruction === cand.pieceId || cand.type === 'fallback') {
+    if (
+      solution.expectedFirstObstruction === cand.pieceId ||
+      cand.type === 'fallback' ||
+      (cand.type === 'wisp_threat' && !isOccluded)
+    ) {
       reachabilityScore += 12; // Unobstructed direct strike
     }
 
@@ -727,6 +778,209 @@ export function scoreCandidates(
 }
 
 /**
+ * Evaluates reachability and valid trajectories for an active Bullseye Block.
+ */
+export function evaluateBullseyeOverride(
+  bullseyePiece: PlacedPiece,
+  attack: AuthoredAttack,
+  levelState: LevelState,
+  launcherOrigin: Vector2,
+): {
+  reachable: boolean;
+  validTrajectoryCount: number;
+  selectedCandidate: TargetCandidate | null;
+  selectedSolution: TrajectorySolution | null;
+} {
+  const activePieces = levelState.pieces.filter((p) => p.condition !== 'LOST');
+  const activeWisps = levelState.wisps.filter((w) => !w.isDispersed);
+  const speedRange = getSpeedRangeForLauncher(attack.attackerType, launcherOrigin.x);
+  const projRadius = attack.attackerType === 'standard' ? 16 : 24;
+  const config = MATERIAL_CONFIGS[bullseyePiece.type];
+
+  // Check if Bullseye is outside the launcher's effective siege range envelope
+  if (
+    bullseyePiece.position.x > WORLD_CONFIG.buildZone.maxX + 60 ||
+    bullseyePiece.position.x < WORLD_CONFIG.buildZone.minX - 40 ||
+    bullseyePiece.position.y < WORLD_CONFIG.buildZone.minY
+  ) {
+    return {
+      reachable: false,
+      validTrajectoryCount: 0,
+      selectedCandidate: null,
+      selectedSolution: null,
+    };
+  }
+
+  let nearestWispDist = Infinity;
+  let wispsNearCount = 0;
+  for (const wisp of activeWisps) {
+    const d = Math.hypot(
+      bullseyePiece.position.x - wisp.position.x,
+      bullseyePiece.position.y - wisp.position.y,
+    );
+    if (d < nearestWispDist) nearestWispDist = d;
+    if (d <= 180) wispsNearCount++;
+  }
+
+  const targetPoints: TargetCandidate[] = [
+    {
+      id: `front_${bullseyePiece.id}`,
+      type: 'piece_exposed_front',
+      position: {
+        x: bullseyePiece.position.x - config.width / 2,
+        y: Math.min(WORLD_CONFIG.groundY - projRadius - 2, bullseyePiece.position.y + 8),
+      },
+      pieceId: bullseyePiece.id,
+      material: bullseyePiece.type,
+      condition: bullseyePiece.condition || 'INTACT',
+      isPrebuilt: bullseyePiece.isPrebuilt,
+      attachedAnchorId: bullseyePiece.attachedAnchorId,
+      supportingCount: 0,
+      wispsNearCount,
+      nearestWispDist,
+      isExposed: true,
+    },
+    {
+      id: `center_${bullseyePiece.id}`,
+      type: bullseyePiece.attachedAnchorId ? 'support_midpoint' : 'piece_center',
+      position: { x: bullseyePiece.position.x, y: bullseyePiece.position.y },
+      pieceId: bullseyePiece.id,
+      material: bullseyePiece.type,
+      condition: bullseyePiece.condition || 'INTACT',
+      isPrebuilt: bullseyePiece.isPrebuilt,
+      attachedAnchorId: bullseyePiece.attachedAnchorId,
+      supportingCount: 0,
+      wispsNearCount,
+      nearestWispDist,
+      isExposed: true,
+    },
+    {
+      id: `upper_${bullseyePiece.id}`,
+      type: 'piece_exposed_top',
+      position: {
+        x: bullseyePiece.position.x,
+        y: bullseyePiece.position.y - config.height / 2,
+      },
+      pieceId: bullseyePiece.id,
+      material: bullseyePiece.type,
+      condition: bullseyePiece.condition || 'INTACT',
+      isPrebuilt: bullseyePiece.isPrebuilt,
+      attachedAnchorId: bullseyePiece.attachedAnchorId,
+      supportingCount: 0,
+      wispsNearCount,
+      nearestWispDist,
+      isExposed: true,
+    },
+  ];
+
+  let validCount = 0;
+  let bestCandidate: TargetCandidate | null = null;
+  let bestSolution: TrajectorySolution | null = null;
+  let bestIsDirect = false;
+
+  const isDirectToBullseye = (sol: TrajectorySolution): boolean =>
+    sol.expectedFirstObstruction === bullseyePiece.id ||
+    sol.expectedFirstObstruction === 'none' ||
+    sol.expectedFirstObstruction === 'ground_bedrock';
+
+  const considerSolution = (pt: TargetCandidate, sol: TrajectorySolution | null) => {
+    if (!sol || !sol.isValid || sol.closestApproachDist > 36) return;
+    validCount++;
+    const direct = isDirectToBullseye(sol);
+    if (
+      !bestSolution ||
+      (direct && !bestIsDirect) ||
+      (direct === bestIsDirect &&
+        bestSolution.closestApproachDist > 18 &&
+        sol.closestApproachDist < bestSolution.closestApproachDist - 2)
+    ) {
+      bestCandidate = pt;
+      bestSolution = sol;
+      bestIsDirect = direct;
+    }
+  };
+
+  for (const pt of targetPoints) {
+    const solLow = solveBallisticTrajectory(
+      launcherOrigin,
+      pt.position,
+      speedRange,
+      activePieces,
+      'low',
+      projRadius,
+    );
+    considerSolution(pt, solLow);
+
+    const solHigh = solveBallisticTrajectory(
+      launcherOrigin,
+      pt.position,
+      speedRange,
+      activePieces,
+      'high',
+      projRadius,
+    );
+    if (
+      solHigh &&
+      (!solLow ||
+        Math.abs(solHigh.launchAngleDeg - solLow.launchAngleDeg) > 1.0 ||
+        isDirectToBullseye(solHigh) !== isDirectToBullseye(solLow))
+    ) {
+      considerSolution(pt, solHigh);
+    }
+
+    // Also evaluate explicit high-clearance arcs across the allowed speed envelope if low/high default speeds were obstructed
+    if (!bestIsDirect) {
+      const dx = pt.position.x - launcherOrigin.x;
+      const dy = pt.position.y - launcherOrigin.y;
+      const [minSpd, maxSpd] = speedRange;
+      for (const frac of [0.35, 0.55, 0.75, 0.92]) {
+        const spd = minSpd + (maxSpd - minSpd) * frac;
+        const a = (GRAVITY_TICK * dx * dx) / (2 * spd * spd);
+        const b = dx;
+        const c = a - dy;
+        const D = b * b - 4 * a * c;
+        if (D < 0) continue;
+        const sqrtD = Math.sqrt(D);
+        for (const arc of [
+          { theta: Math.atan((-b + sqrtD) / (2 * a)), type: 'low' as const },
+          { theta: Math.atan((-b - sqrtD) / (2 * a)), type: 'high' as const },
+        ]) {
+          const angleDeg = (arc.theta * 180) / Math.PI;
+          if (angleDeg < -68 || angleDeg > 50) continue;
+          const vx = spd * Math.cos(arc.theta);
+          const vy = spd * Math.sin(arc.theta);
+          const tr = testTrajectoryArc(launcherOrigin, vx, vy, pt.position, activePieces, projRadius);
+          if (!tr.isValid || tr.closestApproachDist > 36) continue;
+          const tApexTicks = vy < 0 ? -vy / GRAVITY_TICK : 0;
+          const apexX = launcherOrigin.x + vx * tApexTicks;
+          const apexY = vy < 0 ? launcherOrigin.y - (vy * vy) / (2 * GRAVITY_TICK) : launcherOrigin.y;
+          considerSolution(pt, {
+            launchVelocity: { x: vx, y: vy },
+            launchAngleDeg: angleDeg,
+            launchSpeed: spd,
+            trajectoryType: arc.type,
+            closestApproachDist: tr.closestApproachDist,
+            expectedFirstObstruction: tr.expectedFirstObstruction,
+            overshootsFortress: tr.overshootsFortress,
+            predictedApex: { x: apexX, y: apexY },
+            apexHeightAboveGround: WORLD_CONFIG.groundY - apexY,
+            predictedFlightDurationSec: dx / vx / 60,
+            isValid: true,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    reachable: validCount > 0 && bestCandidate !== null && bestSolution !== null,
+    validTrajectoryCount: validCount,
+    selectedCandidate: bestCandidate,
+    selectedSolution: bestSolution,
+  };
+}
+
+/**
  * Main targeting function: evaluates fortress, active wisps, and attacker to select target & calculate trajectory
  */
 export function selectTargetAndTrajectory(
@@ -741,7 +995,158 @@ export function selectTargetAndTrajectory(
   const launcherOrigin = attack.spawnPosition;
   const activePreset = preset ?? getDistancePresetFromOrigin(launcherOrigin.x);
   const allCandidates = generateTargetCandidates(levelState, launcherOrigin);
-  const scored = scoreCandidates(allCandidates, attack.attackerType, levelState, launcherOrigin);
+
+  // Locate Bullseye piece if placed on the battlefield
+  const bullseyePiece = levelState.pieces.find((p) => p.type === 'bullseye_block') ?? null;
+  const bullseyeExpired = Boolean(bullseyePiece?.bullseyeExpired);
+  const bullseyeCondition = bullseyePiece ? bullseyePiece.condition || 'INTACT' : 'NONE';
+  const bullseyeIsBrokenOrLost =
+    bullseyeCondition === 'BROKEN' || bullseyeCondition === 'LOST';
+  const bullseyeEligibleForOverride =
+    bullseyePiece !== null &&
+    !bullseyeExpired &&
+    !bullseyeIsBrokenOrLost &&
+    bullseyePiece.bullseyeActive !== false;
+
+  // Compute ordinary candidate ranking (excluding an active un-expired Bullseye so ordinaryTargetWithoutOverride is exact)
+  const ordinaryCandidates = bullseyeEligibleForOverride
+    ? allCandidates.filter((c) => c.pieceId !== bullseyePiece.id)
+    : allCandidates;
+  const scored = scoreCandidates(
+    ordinaryCandidates,
+    attack.attackerType,
+    levelState,
+    launcherOrigin,
+  );
+  const ordinaryTopTargetId = scored.length > 0 ? scored[0].candidate.id : 'fallback_west_pylon';
+
+  // Determine Bullseye inventory status and diagnostic fields
+  let bullseyeInventoryStatus = 'IN_RESERVE';
+  if (bullseyePiece) {
+    if (bullseyeIsBrokenOrLost) {
+      bullseyeInventoryStatus = 'DESTROYED';
+    } else if (bullseyeExpired) {
+      bullseyeInventoryStatus = 'PLACED_EXPIRED';
+    } else {
+      bullseyeInventoryStatus = 'PLACED_ACTIVE';
+    }
+  }
+
+  let bullseyeReachable = false;
+  let validBullseyeTrajectoryCount = 0;
+  let bullseyeOverrideSelected = false;
+  let overrideCancellationReason: string | null =
+    bullseyePiece?.overrideCancellationReason ?? null;
+
+  if (bullseyePiece) {
+    if (bullseyeIsBrokenOrLost && !bullseyeExpired) {
+      overrideCancellationReason = 'BULLSEYE_BROKEN_OR_LOST_BEFORE_LAUNCH';
+    } else if (bullseyeExpired) {
+      overrideCancellationReason =
+        overrideCancellationReason ?? 'BULLSEYE_ALREADY_EXPIRED_AFTER_ONE_ATTACK';
+    } else if (bullseyeEligibleForOverride) {
+      const evalResult = evaluateBullseyeOverride(
+        bullseyePiece,
+        attack,
+        levelState,
+        launcherOrigin,
+      );
+      bullseyeReachable = evalResult.reachable;
+      validBullseyeTrajectoryCount = evalResult.validTrajectoryCount;
+
+      if (
+        evalResult.reachable &&
+        evalResult.selectedCandidate &&
+        evalResult.selectedSolution
+      ) {
+        bullseyeOverrideSelected = true;
+        overrideCancellationReason = null;
+        const bCand = evalResult.selectedCandidate;
+        const bSol = evalResult.selectedSolution;
+
+        const diag: TargetingDiagnostics = {
+          currentAttacker: attack.attackerType,
+          distancePreset: activePreset,
+          distanceToFortressFront: 200 - launcherOrigin.x,
+          candidateCount: allCandidates.length,
+          reachableCandidateCount: scored.length + 1,
+          selectedTargetId: bCand.id,
+          selectedTargetType: bCand.type,
+          selectedTargetMaterial: bCand.material || 'bullseye_block',
+          selectedTargetCondition: bCand.condition || 'INTACT',
+          activeWispsNearTarget: bCand.wispsNearCount,
+          structuralImportanceScore: 100,
+          materialPreferenceScore: 100,
+          wispProximityScore: 100,
+          reachabilityScore: 100,
+          totalTargetScore: 400,
+          targetWorldCoordinates: bCand.position,
+          launchOriginWorldCoordinates: launcherOrigin,
+          deltaToTarget: {
+            x: bCand.position.x - launcherOrigin.x,
+            y: bCand.position.y - launcherOrigin.y,
+          },
+          launchVelocity: bSol.launchVelocity,
+          launchAngle: bSol.launchAngleDeg,
+          launchSpeed: bSol.launchSpeed,
+          selectedTrajectoryType: bSol.trajectoryType,
+          predictedApex: bSol.predictedApex,
+          apexHeightAboveGround: bSol.apexHeightAboveGround,
+          predictedFlightDurationSec: bSol.predictedFlightDurationSec,
+          expectedFirstObstruction: bSol.expectedFirstObstruction,
+          predictedClosestApproach: bSol.closestApproachDist,
+          fallbackUsed: false,
+          rejectedTrajectoryCount: allCandidates.length - scored.length,
+          failureReason: null,
+          bullseyePieceId: bullseyePiece.id,
+          bullseyeInventoryStatus,
+          bullseyeCondition,
+          bullseyeActive: true,
+          bullseyeTriggered: Boolean(bullseyePiece.bullseyeTriggered),
+          bullseyeExpired: false,
+          bullseyeWorldCoordinates: { ...bullseyePiece.position },
+          bullseyeReachableByCurrentAttacker: true,
+          validBullseyeTrajectoryCount,
+          bullseyeOverrideSelected: true,
+          attackIdConsumingBullseye: bullseyePiece.consumedByAttackId ?? null,
+          overrideCancellationReason: null,
+          actualFirstImpactObject: null,
+          distanceBetweenImpactAndBullseye: null,
+          ordinaryTargetWithoutOverride: ordinaryTopTargetId,
+        };
+
+        return {
+          target: bCand,
+          solution: bSol,
+          diagnostics: diag,
+        };
+      } else {
+        // Unreachable Bullseye: do not consume or expire, fall back to ordinary scoring
+        bullseyeOverrideSelected = false;
+        overrideCancellationReason = 'UNREACHABLE_BY_CURRENT_ATTACKER';
+      }
+    }
+  }
+
+  const bullseyeDiagFields = {
+    bullseyePieceId: bullseyePiece?.id ?? 'bullseye_tutorial_1',
+    bullseyeInventoryStatus,
+    bullseyeCondition,
+    bullseyeActive: Boolean(
+      bullseyePiece && !bullseyeExpired && !bullseyeIsBrokenOrLost && bullseyePiece.bullseyeActive !== false,
+    ),
+    bullseyeTriggered: Boolean(bullseyePiece?.bullseyeTriggered),
+    bullseyeExpired,
+    bullseyeWorldCoordinates: bullseyePiece ? { ...bullseyePiece.position } : null,
+    bullseyeReachableByCurrentAttacker: bullseyeReachable,
+    validBullseyeTrajectoryCount,
+    bullseyeOverrideSelected: false,
+    attackIdConsumingBullseye: bullseyePiece?.consumedByAttackId ?? null,
+    overrideCancellationReason,
+    actualFirstImpactObject: null,
+    distanceBetweenImpactAndBullseye: null,
+    ordinaryTargetWithoutOverride: ordinaryTopTargetId,
+  };
 
   if (scored.length === 0) {
     // If no candidate was solvable, construct fallback targeting
@@ -800,6 +1205,7 @@ export function selectTargetAndTrajectory(
         fallbackUsed: true,
         rejectedTrajectoryCount: allCandidates.length,
         failureReason: 'No standard candidates reachable; fallback used',
+        ...bullseyeDiagFields,
       };
       return { target: fallbackTarget, solution: fallbackSolution, diagnostics: diag };
     }
@@ -842,6 +1248,7 @@ export function selectTargetAndTrajectory(
     fallbackUsed: selected.candidate.type === 'fallback',
     rejectedTrajectoryCount: allCandidates.length - scored.length,
     failureReason: null,
+    ...bullseyeDiagFields,
   };
 
   return {

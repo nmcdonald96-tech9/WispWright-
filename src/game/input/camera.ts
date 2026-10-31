@@ -44,6 +44,7 @@ export class Camera {
   public maxZoom = 2.5;
 
   public framingMode: CameraFramingMode = 'CONSTRUCTION_CAMERA';
+  public isUserInteracting = false;
 
   public resize(width: number, height: number): void {
     this.viewWidth = width;
@@ -71,13 +72,16 @@ export class Camera {
     this.targetScale = Math.min(scaleX, scaleY);
     this.targetCenter = { ...center };
 
-    if (immediate) {
+    if (immediate && !this.isUserInteracting) {
       this.currentCenter = { ...center };
       this.currentScale = this.targetScale;
     }
   }
 
   public update(dt: number): void {
+    // Never auto-pan or auto-zoom while the player is actively dragging or touching the canvas
+    if (this.isUserInteracting) return;
+
     const factor = 1 - Math.exp(-dt * 6.5);
     this.currentCenter.x += (this.targetCenter.x - this.currentCenter.x) * factor;
     this.currentCenter.y += (this.targetCenter.y - this.currentCenter.y) * factor;

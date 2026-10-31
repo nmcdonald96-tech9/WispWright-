@@ -49,7 +49,7 @@ export const StabilityGauge: React.FC<StabilityGaugeProps> = ({
           <div className="flex items-center gap-1.5 min-w-0">
             <Activity className="w-3.5 h-3.5 text-cyan-400 shrink-0 animate-pulse" />
             <span className="text-[11px] font-semibold text-slate-300 truncate">
-              {isSettled ? (
+              {isSettled && !isCollapsed ? (
                 <span className="text-emerald-400 font-bold flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                   {isDeveloperMode
@@ -61,7 +61,9 @@ export const StabilityGauge: React.FC<StabilityGaugeProps> = ({
                   <XCircle className="w-3.5 h-3.5 shrink-0" />
                   {isDeveloperMode
                     ? `Collapse (${report.fallenCount})`
-                    : 'Structure Damaged'}
+                    : isSettled
+                      ? 'Fortress Unstable'
+                      : 'Structure Damaged'}
                 </span>
               ) : (
                 <span className="text-amber-400 font-bold flex items-center gap-1">
@@ -79,9 +81,9 @@ export const StabilityGauge: React.FC<StabilityGaugeProps> = ({
             <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all duration-75 ${
-                  isSettled
+                  isSettled && !isCollapsed
                     ? 'bg-emerald-400'
-                    : report.totalKineticEnergy > 0.3
+                    : isCollapsed || report.totalKineticEnergy > 0.3
                       ? 'bg-rose-500'
                       : 'bg-cyan-400'
                 }`}

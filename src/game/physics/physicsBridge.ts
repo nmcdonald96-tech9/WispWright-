@@ -28,6 +28,9 @@ export interface SimulatedPieceTransform {
   isPrebuilt: boolean;
   condition: PieceCondition;
   impactSeverity: number;
+  bullseyeActive?: boolean;
+  bullseyeTriggered?: boolean;
+  bullseyeExpired?: boolean;
 }
 
 export interface DetailedPhysicsDiagnostics {
@@ -74,6 +77,7 @@ export class PhysicsBridge {
   private activeAttack: AuthoredAttack | null = null;
   private projectileFlightTime = 0;
   private pieceConditions: Map<string, { condition: PieceCondition; impactSeverity: number }> = new Map();
+  private initialPieceTransforms: Map<string, { x: number; y: number; rotation: number }> = new Map();
   private dispersedWispIds: Set<string> = new Set();
   private processedContacts: Set<string> = new Set();
 
@@ -93,6 +97,11 @@ export class PhysicsBridge {
     // Initialize piece conditions from level state
     for (const piece of levelState.pieces) {
       this.pieceTypeMap.set(piece.id, piece.type);
+      this.initialPieceTransforms.set(piece.id, {
+        x: piece.position.x,
+        y: piece.position.y,
+        rotation: piece.rotation,
+      });
       this.pieceConditions.set(piece.id, {
         condition: piece.condition || 'INTACT',
         impactSeverity: piece.impactSeverity || 0,
@@ -192,7 +201,8 @@ export class PhysicsBridge {
           density: config.density,
           friction: config.friction,
           frictionStatic: config.friction * 1.3,
-          frictionAir: piece.type === 'stone_block' ? 0.015 : 0.02,
+          frictionAir:
+            piece.type === 'stone_block' || piece.type === 'bullseye_block' ? 0.015 : 0.02,
           restitution: config.restitution,
           sleepThreshold: 25,
           label: `piece_${piece.id}`,
@@ -506,6 +516,9 @@ export class PhysicsBridge {
           isPrebuilt: piece.isPrebuilt,
           condition: conditionData.condition,
           impactSeverity: conditionData.impactSeverity,
+          bullseyeActive: piece.bullseyeActive,
+          bullseyeTriggered: piece.bullseyeTriggered,
+          bullseyeExpired: piece.bullseyeExpired,
         };
       }
 
@@ -521,6 +534,9 @@ export class PhysicsBridge {
         isPrebuilt: piece.isPrebuilt,
         condition: isFallen ? 'LOST' : conditionData.condition,
         impactSeverity: conditionData.impactSeverity,
+        bullseyeActive: piece.bullseyeActive,
+        bullseyeTriggered: piece.bullseyeTriggered,
+        bullseyeExpired: piece.bullseyeExpired,
       };
     });
   }
@@ -547,17 +563,31 @@ export class PhysicsBridge {
       }
     }
 
+    const isPureGravityTest =
+      this.activeAttack === null && this.diagnostics.firstImpactCoordinates === null;
+
     for (const [pieceId, body] of this.pieceBodyMap.entries()) {
       const cond = this.pieceConditions.get(pieceId)?.condition || 'INTACT';
+      const initTf = this.initialPieceTransforms.get(pieceId);
+      const disp = initTf
+        ? Math.hypot(body.position.x - initTf.x, body.position.y - initTf.y)
+        : 0;
+      const rotDiff = initTf ? Math.abs(body.angle - initTf.rotation) : 0;
+      const collapsedInGravityTest =
+        isPureGravityTest && (disp > 28 || rotDiff > 0.4 || cond === 'BROKEN');
+
       if (body.position.y > WORLD_CONFIG.lossBoundaryY || cond === 'LOST') {
         fallenCount++;
         lostCount++;
       } else if (cond === 'BROKEN') {
         brokenCount++;
+        if (collapsedInGravityTest) fallenCount++;
       } else if (cond === 'CRACKED') {
         crackedCount++;
+        if (collapsedInGravityTest) fallenCount++;
       } else {
         intactCount++;
+        if (collapsedInGravityTest) fallenCount++;
       }
 
       if (body.isSleeping) {
@@ -625,8 +655,18 @@ export class PhysicsBridge {
         piece.rotation = body.angle;
       }
       if (cond) {
-        piece.condition = cond.condition;
-        piece.impactSeverity = cond.impactSeverity;
+        const severityRank: Record<string, number> = {
+          INTACT: 0,
+          CRACKED: 1,
+          BROKEN: 2,
+          LOST: 3,
+        };
+        const currentRank = severityRank[piece.condition || 'INTACT'] ?? 0;
+        const simRank = severityRank[cond.condition] ?? 0;
+        if (simRank >= currentRank) {
+          piece.condition = cond.condition;
+          piece.impactSeverity = cond.impactSeverity;
+        }
       }
     }
 

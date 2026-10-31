@@ -4,7 +4,7 @@
  */
 
 import { MATERIAL_CONFIGS } from '../config';
-import { DragState, PlacedPiece, Vector2 } from '../types';
+import { AuthoritativeTutorialState, DragState, PlacedPiece, Vector2 } from '../types';
 import { renderPiece } from './renderPieces';
 
 export function renderGizmos(
@@ -168,15 +168,24 @@ export function renderGizmos(
 
     ctx.restore();
 
-    // Non-color-only status badge above selected damaged/prebuilt piece
-    if (cond === 'BROKEN' || cond === 'CRACKED' || selectedPiece.isPrebuilt) {
+    // Non-color-only status badge above selected damaged/prebuilt/bullseye piece
+    if (
+      cond === 'BROKEN' ||
+      cond === 'CRACKED' ||
+      selectedPiece.isPrebuilt ||
+      selectedPiece.type === 'bullseye_block'
+    ) {
       ctx.save();
       const label =
         cond === 'BROKEN'
           ? '⚡ BROKEN DEBRIS (NON-REUSABLE)'
           : cond === 'CRACKED'
             ? '⚠️ CRACKED (LOCKED IN PLACE)'
-            : '⚓ ANCIENT FOUNDATION (FIXED)';
+            : selectedPiece.type === 'bullseye_block'
+              ? selectedPiece.bullseyeExpired
+                ? '🗿 BULLSEYE SPENT (NORMAL STONE BLOCK)'
+                : '🎯 BULLSEYE BLOCK (DRAWS NEXT REACHABLE SHOT)'
+              : '⚓ ANCIENT FOUNDATION (FIXED)';
       ctx.font = '700 10px system-ui, sans-serif';
       const tw = ctx.measureText(label).width;
       const bx = selectedPiece.position.x - tw / 2 - 8;
@@ -187,8 +196,13 @@ export function renderGizmos(
           ? 'rgba(127, 29, 29, 0.94)'
           : cond === 'CRACKED'
             ? 'rgba(120, 53, 15, 0.94)'
-            : 'rgba(15, 23, 42, 0.94)';
-      ctx.strokeStyle = reticleColor;
+            : selectedPiece.type === 'bullseye_block' && !selectedPiece.bullseyeExpired
+              ? 'rgba(76, 5, 25, 0.94)'
+              : 'rgba(15, 23, 42, 0.94)';
+      ctx.strokeStyle =
+        selectedPiece.type === 'bullseye_block' && !selectedPiece.bullseyeExpired
+          ? '#f43f5e'
+          : reticleColor;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.roundRect(bx, by, tw + 16, 19, 4);
@@ -203,3 +217,143 @@ export function renderGizmos(
     }
   }
 }
+
+/**
+ * Renders distinct world-space tutorial placement suggestion (ghost piece, dashed region,
+ * downward placement arrow, and support-socket callouts) during Guided Lesson Steps 1-4.
+ */
+export function renderTutorialGuidanceOverlay(
+  ctx: CanvasRenderingContext2D,
+  tutorialState: AuthoritativeTutorialState,
+  timeSec: number,
+  reducedMotion = false,
+): void {
+  if (tutorialState.guidanceSkipped || tutorialState.basicLessonComplete) return;
+  const region = tutorialState.currentSuggestedPlacementRegion;
+  if (!region) return;
+
+  const pulse = reducedMotion ? 0.5 : 0.5 + 0.5 * Math.sin(timeSec * 3.8);
+  const hw = region.width / 2;
+  const hh = region.height / 2;
+  const cx = region.center.x;
+  const cy = region.center.y;
+
+  ctx.save();
+
+  // 1. Subtle tolerance zone spotlight halo
+  const haloGrad = ctx.createRadialGradient(
+    cx,
+    cy,
+    12,
+    cx,
+    cy,
+    region.toleranceRadius,
+  );
+  haloGrad.addColorStop(0, `rgba(45, 212, 191, ${0.14 + pulse * 0.08})`);
+  haloGrad.addColorStop(0.7, 'rgba(45, 212, 191, 0.04)');
+  haloGrad.addColorStop(1, 'rgba(45, 212, 191, 0)');
+  ctx.fillStyle = haloGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, region.toleranceRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 2. Translucent ghost piece at suggested placement
+  renderPiece(
+    ctx,
+    region.pieceType,
+    region.center,
+    0,
+    false,
+    false,
+    false,
+    0.34 + pulse * 0.12,
+  );
+
+  // 3. Distinct double-dashed tutorial placement frame (Teal-Emerald tutorial motif)
+  ctx.strokeStyle = `rgba(94, 234, 212, ${0.75 + pulse * 0.25})`;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([7, 4]);
+  ctx.strokeRect(cx - hw - 5, cy - hh - 5, region.width + 10, region.height + 10);
+  ctx.setLineDash([]);
+
+  // Corner brackets so highlight does not rely on color alone
+  const bLen = 8;
+  const corners = [
+    { x: cx - hw - 5, y: cy - hh - 5, dx: bLen, dy: bLen },
+    { x: cx + hw + 5, y: cy - hh - 5, dx: -bLen, dy: bLen },
+    { x: cx + hw + 5, y: cy + hh + 5, dx: -bLen, dy: -bLen },
+    { x: cx - hw - 5, y: cy + hh + 5, dx: bLen, dy: -bLen },
+  ];
+  ctx.strokeStyle = '#ccfbf1';
+  ctx.lineWidth = 2.2;
+  for (const c of corners) {
+    ctx.beginPath();
+    ctx.moveTo(c.x + c.dx, c.y);
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(c.x, c.y + c.dy);
+    ctx.stroke();
+  }
+
+  // 4. Support-point diamond callouts on nearby columns/bedrock
+  for (let i = 0; i < region.supportPoints.length; i++) {
+    const sp = region.supportPoints[i];
+    const isPrimary = i === 0;
+    const r = isPrimary ? 8 + pulse * 2.5 : 6;
+    ctx.save();
+    ctx.translate(sp.x, sp.y);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = isPrimary ? 'rgba(20, 184, 166, 0.35)' : 'rgba(56, 189, 248, 0.22)';
+    ctx.strokeStyle = isPrimary ? '#5eead4' : '#7dd3fc';
+    ctx.lineWidth = isPrimary ? 2 : 1.4;
+    ctx.fillRect(-r / 2, -r / 2, r, r);
+    ctx.strokeRect(-r / 2, -r / 2, r, r);
+    ctx.restore();
+  }
+
+  // 5. Downward Placement Arrow & Tutorial Label Badge above ghost piece
+  const bounceY = reducedMotion ? 0 : Math.sin(timeSec * 4.5) * 4;
+  const arrowTipY = cy - hh - 12 + bounceY;
+  const arrowTopY = arrowTipY - 18;
+
+  ctx.strokeStyle = '#5eead4';
+  ctx.fillStyle = '#5eead4';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(cx, arrowTopY);
+  ctx.lineTo(cx, arrowTipY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 6, arrowTipY - 6);
+  ctx.lineTo(cx, arrowTipY + 1);
+  ctx.lineTo(cx + 6, arrowTipY - 6);
+  ctx.closePath();
+  ctx.fill();
+
+  const badgeText =
+    tutorialState.currentGuidedStep === 'STEP_4_CREATE_SUPPORT'
+      ? '✦ ALIGN TO GLOWING SUPPORT POINT'
+      : region.pieceType === 'wood_beam'
+        ? '✦ SUGGESTED: ROOF BEAM SPAN'
+        : '✦ SUGGESTED: SUPPORT BLOCK';
+  ctx.font = '700 10px system-ui, sans-serif';
+  const tw = ctx.measureText(badgeText).width;
+  const bx = cx - tw / 2 - 8;
+  const by = arrowTopY - 22;
+
+  ctx.fillStyle = 'rgba(4, 47, 46, 0.92)';
+  ctx.strokeStyle = '#2dd4bf';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, tw + 16, 18, 5);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#ccfbf1';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(badgeText, bx + 8, by + 9);
+
+  ctx.restore();
+}
+

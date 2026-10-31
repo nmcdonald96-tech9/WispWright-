@@ -127,6 +127,8 @@ export class GestureController {
     this.renderer.dragState = null;
     this.renderer.touchContactWorldPos = undefined;
     this.renderer.selectedPieceId = null;
+    this.renderer.camera.isUserInteracting = false;
+    this.store.setActiveDragTutorialContext(null, this.snappingEnabled);
     this.draggingPlacedPiece = null;
     this.pendingDragPiece = null;
     this.originalPieceTransform = null;
@@ -143,6 +145,9 @@ export class GestureController {
 
     const available = this.store.getState().inventory[type] || 0;
     if (available <= 0) return;
+
+    this.renderer.camera.isUserInteracting = true;
+    this.store.setActiveDragTutorialContext(type, this.snappingEnabled);
 
     const rect = this.canvas.getBoundingClientRect();
     const touchWorld = this.renderer.camera.screenToWorld(clientX, clientY, rect);
@@ -179,6 +184,7 @@ export class GestureController {
     const effectiveMode = this.renderer.getEffectiveMode();
     if (!isEditableMode(effectiveMode)) return;
 
+    this.renderer.camera.isUserInteracting = true;
     this.canvas.setPointerCapture?.(e.pointerId);
     this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
     this.pointerDownPos = { x: e.clientX, y: e.clientY };
@@ -374,6 +380,11 @@ export class GestureController {
       this.renderer.touchContactWorldPos = undefined;
       this.draggingPlacedPiece = null;
       this.originalPieceTransform = null;
+    }
+
+    if (this.activePointers.size === 0) {
+      this.renderer.camera.isUserInteracting = false;
+      this.store.setActiveDragTutorialContext(null, this.snappingEnabled);
     }
 
     this.pendingDragPiece = null;

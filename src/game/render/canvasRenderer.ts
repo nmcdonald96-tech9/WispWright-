@@ -13,7 +13,7 @@ import { AUTHORED_ATTACKS } from '../siege/siegeConfig';
 import { LevelStore } from '../state/levelStore';
 import { DragState, GameMode, PlacedPiece, StabilityReport, Vector2 } from '../types';
 import { renderEnvironment } from './renderEnvironment';
-import { renderGizmos } from './renderGizmos';
+import { renderGizmos, renderTutorialGuidanceOverlay } from './renderGizmos';
 import { renderLauncher } from './renderLauncher';
 import { renderPiece } from './renderPieces';
 import {
@@ -116,6 +116,8 @@ export class CanvasRenderer {
 
     if (mode === 'TESTING_SIMULATION') {
       this.store.captureSnapshot();
+      this.store.setSavedPhase('TESTING_SIMULATION');
+      this.store.recordStabilityTestStarted();
       this.selectedPieceId = null;
       this.dragState = null;
 
@@ -132,12 +134,39 @@ export class CanvasRenderer {
       if (this.siegeController.physicsBridge) {
         this.siegeController.returnToConstruction();
       }
-      this.store.restorePreTestSnapshot();
+      this.store.restorePreTestSnapshot(true);
+      this.store.setSavedPhase('CONSTRUCTION');
       soundSynth.playSnap();
     }
   }
 
+  public acceptStableDesign(): boolean {
+    if (this.physicsBridge) {
+      this.physicsBridge.teardown();
+      this.physicsBridge = null;
+    }
+    this.mode = 'CONSTRUCTION';
+    const accepted = this.siegeController.acceptStableDesignFromTest();
+    soundSynth.playSettledFanfare();
+    return accepted;
+  }
+
+  public returnToBuildFromTest(): void {
+    if (this.physicsBridge) {
+      this.physicsBridge.teardown();
+      this.physicsBridge = null;
+    }
+    this.mode = 'CONSTRUCTION';
+    this.siegeController.returnToBuildFromStabilityTest();
+    soundSynth.playSnap();
+  }
+
   public startSiegeTest(enableReinforcement = true): boolean {
+    const gate = this.siegeController.canBeginSiege();
+    if (!gate.allowed) {
+      return this.siegeController.attemptBeginSiege(enableReinforcement);
+    }
+
     this.selectedPieceId = null;
     this.dragState = null;
     this.povStepAccumulator = 0;
@@ -146,7 +175,7 @@ export class CanvasRenderer {
       this.physicsBridge.teardown();
       this.physicsBridge = null;
     }
-    const started = this.siegeController.startSiege(enableReinforcement);
+    const started = this.siegeController.attemptBeginSiege(enableReinforcement);
     if (started) {
       this.mode = this.siegeController.mode;
     }
@@ -276,13 +305,22 @@ export class CanvasRenderer {
       const report = this.physicsBridge.getStabilityReport(dt);
       this.lastReport = report;
 
-      if (this.onStabilityUpdate) {
-        this.onStabilityUpdate(report);
-      }
-
       if (report.isSettled && this.mode === 'TESTING_SIMULATION') {
         this.mode = 'SETTLED';
-        soundSynth.playSettledFanfare();
+        this.store.setSavedPhase('SETTLED');
+        if (report.fallenCount === 0) {
+          this.store.recordStabilityTestPassed();
+          soundSynth.playSettledFanfare();
+        } else {
+          this.store.recordStabilityTestFailed(
+            'An unsupported piece shifted or fell under gravity. Brace overhanging spans on columns or bedrock.',
+          );
+          soundSynth.playRemove();
+        }
+      }
+
+      if (this.onStabilityUpdate) {
+        this.onStabilityUpdate(report);
       }
     }
   }
@@ -292,13 +330,43 @@ export class CanvasRenderer {
     const launcherX = this.siegeController.currentAttack?.spawnPosition.x ?? -460;
     const targetPos = this.siegeController.currentTarget?.position ?? { x: 350, y: 580 };
     const activeProj = this.getActivePhysicsBridge()?.getActiveProjectile();
+    const reducedMotion = this.presentationDirector.settings.reducedMotion;
 
     switch (camMode) {
-      case 'CONSTRUCTION_CAMERA':
+      case 'CONSTRUCTION_CAMERA': {
+        const auth = this.store.getAuthoritativeTutorialState();
+        const effectiveMode = this.getEffectiveMode();
+        const isInitialBuild =
+          effectiveMode === 'CONSTRUCTION' ||
+          effectiveMode === 'INITIAL_CONSTRUCTION' ||
+          effectiveMode === 'CONSTRUCTION_READY';
+        if (
+          isInitialBuild &&
+          !auth.guidanceSkipped &&
+          !auth.basicLessonComplete &&
+          !this.dragState &&
+          !this.camera.isUserInteracting
+        ) {
+          if (auth.currentGuidedStep === 'STEP_2_PLACE_BEAM') {
+            this.camera.setFraming({ x: 300, y: 575 }, 490, 470, camMode, reducedMotion);
+            break;
+          }
+          if (
+            auth.currentGuidedStep === 'STEP_3_PLACE_BLOCK' ||
+            auth.currentGuidedStep === 'STEP_4_CREATE_SUPPORT'
+          ) {
+            this.camera.setFraming({ x: 295, y: 585 }, 490, 470, camMode, reducedMotion);
+            break;
+          }
+        }
+        this.camera.setFraming({ x: 360, y: 555 }, 560, 540, camMode, reducedMotion);
+        break;
+      }
+
       case 'REINFORCEMENT_CAMERA':
       case 'RESULTS_CAMERA':
         // Focus tightly on the sanctuary fortress & protected wisps without excessive empty border
-        this.camera.setFraming({ x: 360, y: 555 }, 560, 540, camMode);
+        this.camera.setFraming({ x: 360, y: 555 }, 560, 540, camMode, reducedMotion);
         break;
 
       case 'THREAT_PREVIEW_CAMERA':
@@ -522,6 +590,12 @@ export class CanvasRenderer {
     );
 
     // 4. Render Pieces
+    const diag = this.siegeController.targetingDiagnostics;
+    const isBullseyeUnreachable = Boolean(
+      diag &&
+        diag.bullseyeInventoryStatus === 'PLACED_ACTIVE' &&
+        !diag.bullseyeReachableByCurrentAttacker,
+    );
     if (activeBridge) {
       const simulatedTransforms = activeBridge.getSimulatedTransforms(state.pieces);
       for (const sim of simulatedTransforms) {
@@ -538,6 +612,16 @@ export class CanvasRenderer {
           sim.condition,
           sim.impactSeverity,
           isDeveloperMode,
+          sim.type === 'bullseye_block'
+            ? {
+                active: sim.bullseyeActive ?? !sim.bullseyeExpired,
+                triggered: sim.bullseyeTriggered,
+                expired: sim.bullseyeExpired,
+                unreachable: isBullseyeUnreachable,
+                timeSec: this.timeSec,
+                reducedMotion,
+              }
+            : undefined,
         );
       }
     } else {
@@ -557,6 +641,16 @@ export class CanvasRenderer {
           piece.condition || 'INTACT',
           piece.impactSeverity || 0,
           isDeveloperMode,
+          piece.type === 'bullseye_block'
+            ? {
+                active: piece.bullseyeActive ?? !piece.bullseyeExpired,
+                triggered: piece.bullseyeTriggered,
+                expired: piece.bullseyeExpired,
+                unreachable: isBullseyeUnreachable,
+                timeSec: this.timeSec,
+                reducedMotion,
+              }
+            : undefined,
         );
       }
     }
@@ -623,8 +717,20 @@ export class CanvasRenderer {
     // 7. Render Cosmetic Particles (Impact sparks, dispersal runes, dust)
     this.renderCosmeticParticles(ctx);
 
-    // 8. Render Gizmos in Construction & Reinforcement Mode
+    // 8. Render Tutorial Guidance Overlay & Gizmos in Construction & Reinforcement Mode
     if (isEditableMode(effectiveMode)) {
+      if (
+        effectiveMode === 'CONSTRUCTION' ||
+        effectiveMode === 'INITIAL_CONSTRUCTION' ||
+        effectiveMode === 'CONSTRUCTION_READY'
+      ) {
+        renderTutorialGuidanceOverlay(
+          ctx,
+          this.store.getAuthoritativeTutorialState(state),
+          this.timeSec,
+          reducedMotion,
+        );
+      }
       renderGizmos(
         ctx,
         this.dragState,

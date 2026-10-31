@@ -42,6 +42,18 @@ export const MATERIAL_CONFIGS: Record<MaterialType, MaterialConfig> = {
     borderColor: '#334155',
     description: 'Heavy quarried stone. Extremely stable under compression, but will crush fragile wood.',
   },
+  bullseye_block: {
+    type: 'bullseye_block',
+    name: 'Bullseye Block',
+    width: 48,
+    height: 48,
+    density: 0.0068, // Exact stone_block density (~5.5x mass of wood)
+    friction: 0.98, // Exact stone_block friction
+    restitution: 0.0, // Exact stone_block zero restitution
+    color: '#7c2d12',
+    borderColor: '#f59e0b',
+    description: 'Taunt Stone Block. The next eligible attacker will aim for it if a valid trajectory exists.',
+  },
 };
 
 export const WORLD_CONFIG = {
@@ -200,5 +212,6 @@ export const INITIAL_LEVEL_STATE: LevelState = {
     wood_beam: 4,
     wood_block: 4,
     stone_block: 3,
+    bullseye_block: 1,
   },
 };

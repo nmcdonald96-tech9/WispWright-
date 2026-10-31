@@ -6,6 +6,15 @@
 import { MATERIAL_CONFIGS } from '../config';
 import { MaterialType, PieceCondition, Vector2 } from '../types';
 
+export interface BullseyeRenderFlags {
+  active?: boolean;
+  triggered?: boolean;
+  expired?: boolean;
+  unreachable?: boolean;
+  timeSec?: number;
+  reducedMotion?: boolean;
+}
+
 export function renderPiece(
   ctx: CanvasRenderingContext2D,
   type: MaterialType,
@@ -18,6 +27,7 @@ export function renderPiece(
   condition: PieceCondition = 'INTACT',
   impactSeverity = 0,
   isDeveloperMode = false,
+  bullseyeFlags?: BullseyeRenderFlags,
 ): void {
   const config = MATERIAL_CONFIGS[type];
   const w = config.width;
@@ -104,6 +114,175 @@ export function renderPiece(
     ctx.fillRect(hw - 3 - rSize, -hh + 3, rSize, rSize);
     ctx.fillRect(-hw + 3, hh - 3 - rSize, rSize, rSize);
     ctx.fillRect(hw - 3 - rSize, hh - 3 - rSize, rSize, rSize);
+  } else if (type === 'bullseye_block') {
+    const isExpired = Boolean(bullseyeFlags?.expired) || condition === 'BROKEN';
+    const isTriggered = Boolean(bullseyeFlags?.triggered) && !isExpired;
+    const isUnreachable = Boolean(bullseyeFlags?.unreachable) && !isExpired;
+    const isActive = !isExpired && (bullseyeFlags?.active ?? true);
+    const t = bullseyeFlags?.reducedMotion ? 0 : (bullseyeFlags?.timeSec ?? 0);
+
+    // Base reinforced stone block chassis
+    const stoneGrad = ctx.createLinearGradient(-hw, -hh, hw, hh);
+    if (isExpired) {
+      stoneGrad.addColorStop(0, '#64748b');
+      stoneGrad.addColorStop(0.5, '#475569');
+      stoneGrad.addColorStop(1, '#334155');
+    } else {
+      stoneGrad.addColorStop(0, '#4c1d3d');
+      stoneGrad.addColorStop(0.5, '#3b1730');
+      stoneGrad.addColorStop(1, '#231020');
+    }
+    ctx.fillStyle = stoneGrad;
+    ctx.fillRect(-hw, -hh, w, h);
+
+    // Inner stone bevel
+    ctx.strokeStyle = isExpired ? 'rgba(255, 255, 255, 0.12)' : 'rgba(251, 113, 133, 0.32)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-hw + 2, -hh + 2, w - 4, h - 4);
+
+    // Corner brass/iron clasps
+    ctx.fillStyle = isExpired ? '#475569' : '#f59e0b';
+    const cSz = 5;
+    ctx.fillRect(-hw + 2, -hh + 2, cSz, cSz);
+    ctx.fillRect(hw - 2 - cSz, -hh + 2, cSz, cSz);
+    ctx.fillRect(-hw + 2, hh - 2 - cSz, cSz, cSz);
+    ctx.fillRect(hw - 2 - cSz, hh - 2 - cSz, cSz, cSz);
+
+    // Concentric Target Rings
+    const pulse = isActive && !isUnreachable ? 1 + Math.sin(t * 6) * 0.06 : 1;
+    ctx.save();
+    ctx.scale(pulse, pulse);
+
+    // Outer target ring
+    ctx.beginPath();
+    ctx.arc(0, 0, 17, 0, Math.PI * 2);
+    ctx.fillStyle = isExpired
+      ? 'rgba(51, 65, 85, 0.85)'
+      : isUnreachable
+        ? 'rgba(120, 53, 15, 0.7)'
+        : '#e11d48';
+    ctx.fill();
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = isExpired ? '#94a3b8' : '#fda4af';
+    ctx.stroke();
+
+    // Middle cream/gold ring
+    ctx.beginPath();
+    ctx.arc(0, 0, 11.5, 0, Math.PI * 2);
+    ctx.fillStyle = isExpired ? '#64748b' : '#fef3c7';
+    ctx.fill();
+
+    // Inner bullseye core
+    ctx.beginPath();
+    ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+    ctx.fillStyle = isExpired ? '#334155' : '#be123c';
+    ctx.fill();
+
+    // Expressive Mocking Carved Face inside the Bullseye
+    if (isExpired) {
+      // Dormant sleeping carved face (spent taunt)
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-7, -2);
+      ctx.lineTo(-2, -2);
+      ctx.moveTo(2, -2);
+      ctx.lineTo(7, -2);
+      ctx.moveTo(-4, 5);
+      ctx.lineTo(4, 5);
+      ctx.stroke();
+    } else {
+      // Cheeky winking/taunting eyes & cocked eyebrows
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(-5, -2.5, 2.1, 0, Math.PI * 2);
+      ctx.arc(5, -2.5, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eye glint
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(-5.5, -3.2, 0.9, 0, Math.PI * 2);
+      ctx.arc(4.5, -3.2, 1.0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cocked mocking eyebrows
+      ctx.strokeStyle = '#1e1b4b';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-9, -6.5);
+      ctx.lineTo(-2, -4.5);
+      ctx.moveTo(2, -5.5);
+      ctx.lineTo(9, -8);
+      ctx.stroke();
+
+      // Smug taunting grin with tiny carved tooth
+      ctx.fillStyle = '#1e1b4b';
+      ctx.beginPath();
+      ctx.arc(0, 3, 6.2, 0.1, Math.PI - 0.1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(-1.5, 3.2, 3, 2.3);
+    }
+    ctx.restore();
+
+    // Waving Alchemical Taunt Hand when Active & Reachable
+    if (isActive && !isUnreachable) {
+      const waveAngle = Math.sin(t * 10) * 0.42;
+      ctx.save();
+      ctx.translate(-hw - 3, -hh + 6);
+      ctx.rotate(-0.45 + waveAngle);
+      ctx.fillStyle = '#fbbf24';
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 5.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Little waving fingers
+      ctx.fillRect(-4, -7.5, 2.2, 4);
+      ctx.fillRect(-1, -8.5, 2.2, 4.5);
+      ctx.fillRect(2, -7.5, 2.2, 4);
+      ctx.restore();
+    }
+
+    // Triggered Target Lock Halo
+    if (isTriggered) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+      ctx.lineWidth = 2.2;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(-hw - 4, -hh - 4, w + 8, h + 8);
+      ctx.restore();
+    }
+
+    // Unreachable Warning Indicator on Block
+    if (isUnreachable) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(120, 53, 15, 0.92)';
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.2;
+      ctx.fillRect(-hw + 2, hh - 13, w - 4, 11);
+      ctx.strokeRect(-hw + 2, hh - 13, w - 4, 11);
+      ctx.fillStyle = '#fef3c7';
+      ctx.font = '700 7px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('NO SHOT', 0, hh - 7.5);
+      ctx.restore();
+    }
+
+    // Outer frame border
+    ctx.strokeStyle = isSelected
+      ? '#38bdf8'
+      : isExpired
+        ? '#334155'
+        : isTriggered
+          ? '#fbbf24'
+          : '#f43f5e';
+    ctx.lineWidth = isSelected || isTriggered ? 2.5 : 1.8;
+    ctx.strokeRect(-hw, -hh, w, h);
   } else {
     const stoneGrad = ctx.createLinearGradient(-hw, -hh, hw, hh);
     if (isPrebuilt) {
