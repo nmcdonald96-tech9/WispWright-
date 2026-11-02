@@ -152,7 +152,7 @@ async function runTests(): Promise<void> {
   const placedBeamC = store.placePiece({
     id: 'player_piece_min_beam_1',
     type: 'wood_beam',
-    position: { x: 620, y: 768 },
+    position: { x: 684, y: 768 },
     rotation: 0,
     isPrebuilt: false,
   });
@@ -255,7 +255,7 @@ async function runTests(): Promise<void> {
   store.placePiece({
     id: 'player_piece_d_beam_1',
     type: 'wood_beam',
-    position: { x: 620, y: 768 },
+    position: { x: 684, y: 768 },
     rotation: 0,
     isPrebuilt: false,
   });
@@ -309,7 +309,7 @@ async function runTests(): Promise<void> {
   store.placePiece({
     id: 'player_piece_e_beam_1',
     type: 'wood_beam',
-    position: { x: 620, y: 768 },
+    position: { x: 684, y: 768 },
     rotation: 0,
     isPrebuilt: false,
   });
@@ -367,19 +367,19 @@ async function runTests(): Promise<void> {
   siege.startOver();
   siege.setDevBypassTutorialRequirements(false);
 
-  // Place a minimal compliant build (1 lower stone block at x=152, y=756 + 1 beam at x=620, y=768)
+  // Place a minimal compliant build (1 lower stone block at x=150, y=756 + 1 beam at x=684, y=768)
   // without upper bracing or mid-siege reinforcement, producing a 2/5 Narrow Survival result.
   store.placePiece({
     id: 'player_piece_f_west_block',
     type: 'stone_block',
-    position: { x: 152, y: 756 },
+    position: { x: 150, y: 756 },
     rotation: 0,
     isPrebuilt: false,
   });
   store.placePiece({
     id: 'player_piece_f_east_beam',
     type: 'wood_beam',
-    position: { x: 620, y: 768 },
+    position: { x: 684, y: 768 },
     rotation: 0,
     isPrebuilt: false,
   });

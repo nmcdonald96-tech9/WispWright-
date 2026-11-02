@@ -249,18 +249,28 @@ export function generateTargetCandidates(
   const activePieces = levelState.pieces.filter(
     (p) => p.condition !== 'LOST' && p.position.y < WORLD_CONFIG.lossBoundaryY - 40,
   );
-  const activeWisps = levelState.wisps.filter((w) => !w.isDispersed);
+  const hasAnyPlacedWisp = levelState.wisps.some((w) => w.placed === true);
+  const activeWisps = hasAnyPlacedWisp
+    ? levelState.wisps.filter((w) => !w.isDispersed && w.placed === true)
+    : levelState.wisps.filter((w) => !w.isDispersed);
   const launcherPos = launcherOrigin ?? {
     x: DISTANCE_PRESETS.STANDARD.launcherX,
     y: DISTANCE_PRESETS.STANDARD.launcherY,
   };
 
   // 1. Piece-based candidates
+  const activeJoints = (levelState.joints ?? []).filter((j) => j.state !== 'BROKEN');
   for (const piece of activePieces) {
     const config = MATERIAL_CONFIGS[piece.type];
 
-    // Count how many pieces this piece directly supports above it
+    // Count how many pieces this piece directly supports above it, plus active timber joint connections
     let supportingCount = 0;
+    if (piece.type === 'wood_beam') {
+      const jointCount = activeJoints.filter(
+        (j) => j.pieceAId === piece.id || j.pieceBId === piece.id,
+      ).length;
+      supportingCount += jointCount;
+    }
     for (const other of activePieces) {
       if (other.id === piece.id) continue;
       if (
@@ -270,6 +280,13 @@ export function generateTargetCandidates(
           (config.width + MATERIAL_CONFIGS[other.type].width) / 2
       ) {
         supportingCount++;
+        // If this column supports a joined roof beam, also credit the connected span
+        if (other.type === 'wood_beam') {
+          const supportedBeamJoints = activeJoints.filter(
+            (j) => j.pieceAId === other.id || j.pieceBId === other.id,
+          ).length;
+          supportingCount += supportedBeamJoints;
+        }
       }
     }
 
@@ -331,28 +348,31 @@ export function generateTargetCandidates(
 
   // 2. Wisp threat candidates (only if a wisp is truly exposed without defensive cover in front or above)
   for (const wisp of activeWisps) {
-    let isShielded = false;
+    let hasRoofAbove = false;
+    let hasDirectCover = false;
     for (const piece of activePieces) {
       const halfW = MATERIAL_CONFIGS[piece.type].width / 2;
       // Covered from above by a roof or lintel
-      const isAbove =
-        Math.abs(piece.position.x - wisp.position.x) <= halfW + 4 &&
+      if (
+        Math.abs(piece.position.x - wisp.position.x) <= halfW + 15 &&
         piece.position.y < wisp.position.y &&
-        piece.position.y > wisp.position.y - 120;
+        piece.position.y > wisp.position.y - 140
+      ) {
+        hasRoofAbove = true;
+      }
 
-      // Shielded from the west by a defensive column or wall
-      const isCoverInFront =
+      // Shielded from the west by a defensive piece within direct proximity or line-of-sight
+      if (
         piece.position.x < wisp.position.x &&
-        piece.position.x >= 140 &&
-        Math.abs(piece.position.y - wisp.position.y) < 110;
-
-      if (isAbove || isCoverInFront) {
-        isShielded = true;
-        break;
+        (isLineBlockedByPiece(launcherPos.x, launcherPos.y, wisp.position.x, wisp.position.y, piece) ||
+          ((wisp.position.x - piece.position.x) <= 85 &&
+            Math.abs(piece.position.y - wisp.position.y) < 80))
+      ) {
+        hasDirectCover = true;
       }
     }
 
-    if (!isShielded) {
+    if (!hasRoofAbove && !hasDirectCover) {
       candidates.push({
         id: `wisp_${wisp.id}`,
         type: 'wisp_threat',
@@ -438,6 +458,10 @@ function testTrajectoryArc(
     if (firstObstruction === 'none') {
       for (const piece of activePieces) {
         if (isPointNearPiece(simX, simY, piece, projRadius)) {
+          // If the trajectory already reached within direct contact range of target before this piece, it is behind the target
+          if (minApproachDist <= 16 && simX > target.x) {
+            break;
+          }
           firstObstruction = piece.id;
           break;
         }
@@ -613,7 +637,7 @@ export function scoreCandidates(
 
   for (const cand of candidates) {
     // 1. Solve trajectory
-    const solution = solveBallisticTrajectory(
+    let solution = solveBallisticTrajectory(
       launcherOrigin,
       cand.position,
       speedRange,
@@ -621,6 +645,21 @@ export function scoreCandidates(
       preferredArc,
       projRadius,
     );
+    if (attackerType === 'standard' && cand.type === 'wisp_threat') {
+      const highSol = solveBallisticTrajectory(
+        launcherOrigin,
+        cand.position,
+        speedRange,
+        activePieces,
+        'high',
+        projRadius,
+      );
+      if (highSol && highSol.isValid) {
+        if (!solution || !solution.isValid) {
+          solution = highSol;
+        }
+      }
+    }
 
     if (!solution || !solution.isValid) {
       continue; // Filter out unreachable candidates
@@ -674,48 +713,73 @@ export function scoreCandidates(
       }
     } else {
       // Heavy attacker prioritizes lower supports, stone foundations, and structural columns
-      if (effectiveMaterial === 'stone_block') {
+      if (cand.type === 'wisp_threat') {
+        materialRoleScore += 25; // Focuses on crushing structural components over sniping wisps
+      } else if (effectiveMaterial === 'stone_block') {
         materialRoleScore += 40; // Delights in crushing heavy stone foundations
       } else if (effectiveMaterial === 'wood_block') {
-        materialRoleScore += 20;
+        materialRoleScore += 24;
       } else if (effectiveMaterial === 'wood_beam') {
-        materialRoleScore += 10;
+        materialRoleScore += 16;
+      }
+
+      // Exploit breach if piece is already damaged and near wisps
+      if (cand.condition === 'CRACKED') {
+        materialRoleScore += cand.wispsNearCount >= 2 ? 40 : 20;
       }
 
       // Lower load-bearing support preference
       if (cand.position.y >= 740) {
-        materialRoleScore += 35;
+        materialRoleScore += 25;
       } else if (cand.position.y >= 700) {
         materialRoleScore += 20;
       }
 
-      if (cand.attachedAnchorId) {
-        materialRoleScore += 35; // Bedrock anchor
-      }
-
       // Front and central foundation supports sheltering wisps
-      if (cand.position.x <= 250) {
-        materialRoleScore += 30; // Western bedrock pylon directly facing attack
-      } else if (cand.position.x <= 450) {
-        materialRoleScore += 20; // Central sanctum rune socket
+      if (cand.position.x >= 350 && cand.position.x <= 450) {
+        materialRoleScore += 40; // Central sanctum rune socket / supports
+      } else if (cand.position.x <= 250) {
+        materialRoleScore += 25; // Western bedrock pylon / breach
       }
 
-      // Penalize flimsy high lintels
+      // Penalize occluded pieces unless the obstruction is an already cracked breach directly adjacent to the target
+      const obstructingPiece = activePieces.find(
+        (p) => p.id === solution.expectedFirstObstruction,
+      );
+      const isBreachedObstruction =
+        obstructingPiece?.condition === 'CRACKED' &&
+        Math.hypot(
+          cand.position.x - obstructingPiece.position.x,
+          cand.position.y - obstructingPiece.position.y,
+        ) < 130;
+      if (isOccluded && !isBreachedObstruction) {
+        materialRoleScore -= 45;
+      }
+
+      // Penalize bedrock floor anchor itself (immovable rock foundation absorbs impact)
+      if (cand.attachedAnchorId && cand.attachedAnchorId !== 'anchor_center') {
+        materialRoleScore -= 60;
+      }
+
+      // Penalize flimsy high lintels or upper faces (heavy attacker prefers low foundations)
       if (cand.position.y < 670) {
-        materialRoleScore -= 25;
+        materialRoleScore -= 20;
+      }
+      if (cand.type === 'piece_exposed_top') {
+        materialRoleScore -= 15;
       }
     }
 
     // 3. Wisp Proximity & Protection Score
     let wispProximityScore = 0;
     if (cand.type === 'wisp_threat') {
-      wispProximityScore += 70;
+      wispProximityScore += 75;
     } else {
       // Proximity score: closer to active wisps = higher tactical value
       if (cand.nearestWispDist < 320) {
         wispProximityScore += Math.max(0, 30 * (1 - cand.nearestWispDist / 320));
       }
-      wispProximityScore += Math.min(24, cand.wispsNearCount * 8);
+      wispProximityScore += Math.min(56, cand.wispsNearCount * 14);
     }
 
     // 4. Structural Importance Score
@@ -723,13 +787,20 @@ export function scoreCandidates(
     if (cand.supportingCount > 0) {
       structuralImportanceScore += Math.min(50, cand.supportingCount * 25);
     }
-    if (cand.attachedAnchorId) {
-      structuralImportanceScore += 25; // Directly welded to bedrock anchor
+    if (cand.attachedAnchorId && cand.supportingCount > 0) {
+      structuralImportanceScore += 15; // Directly welded to bedrock anchor and supporting structure
     }
 
-    // Remote irrelevant piece penalty
+    // Remote irrelevant piece penalty or isolated non-load-bearing block outside western wall
     if (cand.nearestWispDist > 240 && cand.supportingCount === 0 && !cand.attachedAnchorId) {
       structuralImportanceScore -= 45;
+    } else if (
+      attackerType === 'heavy' &&
+      cand.supportingCount === 0 &&
+      !cand.attachedAnchorId &&
+      cand.position.x < 185
+    ) {
+      structuralImportanceScore -= 35;
     }
 
     // 5. Reachability & Approach Quality Score
@@ -792,7 +863,7 @@ export function evaluateBullseyeOverride(
   selectedSolution: TrajectorySolution | null;
 } {
   const activePieces = levelState.pieces.filter((p) => p.condition !== 'LOST');
-  const activeWisps = levelState.wisps.filter((w) => !w.isDispersed);
+  const activeWisps = levelState.wisps.filter((w) => !w.isDispersed && w.placed !== false);
   const speedRange = getSpeedRangeForLauncher(attack.attackerType, launcherOrigin.x);
   const projRadius = attack.attackerType === 'standard' ? 16 : 24;
   const config = MATERIAL_CONFIGS[bullseyePiece.type];

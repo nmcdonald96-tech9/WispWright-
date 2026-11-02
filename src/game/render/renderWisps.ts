@@ -17,6 +17,9 @@ export function renderWisps(
   const animTime = reducedMotion ? 0 : timeSec;
 
   wisps.forEach((wisp, index) => {
+    if (wisp.placed !== true) {
+      return;
+    }
     const pres = wispPresentationMap?.get(wisp.id);
     const reaction: WispReactionState =
       pres?.reactionState ?? (wisp.isDispersed ? 'DISPERSED_FADING' : 'CALM_IDLE');

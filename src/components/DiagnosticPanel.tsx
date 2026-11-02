@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import {
+  ConstructionDiagnostics,
   ConstructionRelevanceTelemetry,
   GameMode,
   InventoryCategory,
@@ -63,6 +64,7 @@ interface DiagnosticPanelProps {
   targetingDiagnostics?: TargetingDiagnostics | null;
   presentationDiagnostics?: PresentationDiagnostics | null;
   constructionTelemetry?: ConstructionRelevanceTelemetry;
+  constructionDiagnostics?: ConstructionDiagnostics | null;
   devBypassTutorialRequirements?: boolean;
   onToggleDevBypassTutorialRequirements?: () => void;
   distancePreset?: DistancePreset;
@@ -135,6 +137,7 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
   targetingDiagnostics,
   presentationDiagnostics,
   constructionTelemetry,
+  constructionDiagnostics,
   devBypassTutorialRequirements = false,
   onToggleDevBypassTutorialRequirements,
   distancePreset = 'STANDARD',
@@ -601,6 +604,354 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
             </span>
           </div>
         </div>
+
+        {/* 3B. Construction Inventory-Lift, Beam-Endpoint Snap & Rotation Telemetry (All 38 fields) */}
+        {constructionDiagnostics && (
+          <div className="border-t border-amber-500/30 pt-1.5">
+            <div className="flex items-center gap-1 text-[10px] font-bold text-amber-300 mb-1">
+              <Compass className="w-3 h-3 text-amber-400" />
+              <span>INVENTORY-LIFT &amp; ENDPOINT SNAP TELEMETRY</span>
+            </div>
+            <div className="bg-slate-900/80 rounded p-1.5 space-y-1 text-[9.5px]">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Interaction / Lift State:</span>
+                <span className="text-cyan-300 font-bold">
+                  {constructionDiagnostics.activePointerInteractionType} ·{' '}
+                  {constructionDiagnostics.inventoryLiftState}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Item ID / Ghost Scale:</span>
+                <span className="text-amber-200">
+                  {constructionDiagnostics.activeInventoryItemId || 'none'} · Pres:{' '}
+                  {constructionDiagnostics.ghostPresentationScale.toFixed(2)}x / World:{' '}
+                  {constructionDiagnostics.ghostWorldScale.toFixed(1)}x
+                </span>
+              </div>
+              {constructionDiagnostics.inventorySourceCardBounds && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Source Card Bounds:</span>
+                  <span className="text-slate-300 font-mono">
+                    ({Math.round(constructionDiagnostics.inventorySourceCardBounds.x)},
+                    {Math.round(constructionDiagnostics.inventorySourceCardBounds.y)} ·{' '}
+                    {Math.round(constructionDiagnostics.inventorySourceCardBounds.width)}×
+                    {Math.round(constructionDiagnostics.inventorySourceCardBounds.height)})
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-400">Pointer UI / World:</span>
+                <span className="text-slate-300 font-mono">
+                  {constructionDiagnostics.pointerUiCoordinates
+                    ? `(${Math.round(constructionDiagnostics.pointerUiCoordinates.x)},${Math.round(constructionDiagnostics.pointerUiCoordinates.y)})`
+                    : 'none'}{' '}
+                  /{' '}
+                  {constructionDiagnostics.pointerWorldCoordinates
+                    ? `(${Math.round(constructionDiagnostics.pointerWorldCoordinates.x)},${Math.round(constructionDiagnostics.pointerWorldCoordinates.y)})`
+                    : 'none'}
+                </span>
+              </div>
+              {constructionDiagnostics.ghostWorldCoordinates && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Ghost Pos / Corr Vec:</span>
+                  <span className="text-slate-300 font-mono">
+                    ({Math.round(constructionDiagnostics.ghostWorldCoordinates.x)},{' '}
+                    {Math.round(constructionDiagnostics.ghostWorldCoordinates.y)}) · Δ:
+                    {constructionDiagnostics.positionCorrectionVector
+                      ? `(${Math.round(constructionDiagnostics.positionCorrectionVector.x)},${Math.round(constructionDiagnostics.positionCorrectionVector.y)})`
+                      : '(0,0)'}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-400">Preferred / Current Rot:</span>
+                <span className="text-emerald-300 font-bold">
+                  {Math.round(
+                    ((constructionDiagnostics.preferredPlayerRotation * 180) / Math.PI) % 360,
+                  )}
+                  ° / {Math.round(((constructionDiagnostics.ghostRotation * 180) / Math.PI) % 360)}
+                  ° · {constructionDiagnostics.rotationSource} (rev{' '}
+                  {constructionDiagnostics.manualRotationRevision})
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Piece Sock → Target Sock:</span>
+                <span className="text-teal-300 font-semibold truncate max-w-[175px]">
+                  {constructionDiagnostics.activePieceSocketId || 'none'} →{' '}
+                  {constructionDiagnostics.activeTargetSocketId || 'none'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Compatibility / Dist:</span>
+                <span className="text-amber-300 truncate max-w-[175px]">
+                  {constructionDiagnostics.socketCompatibility || 'NONE'} ·{' '}
+                  {constructionDiagnostics.candidateWorldDistance !== null
+                    ? `${constructionDiagnostics.candidateWorldDistance.toFixed(1)}px`
+                    : '---'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Cand Lock / Rel Radius:</span>
+                <span className="text-cyan-200">
+                  {constructionDiagnostics.candidateLockActive ? 'LOCKED' : 'UNLOCKED'} · R=
+                  {constructionDiagnostics.candidateLockReleaseRadius}px
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Prop Rot / Joint / Support:</span>
+                <span className="text-purple-300">
+                  {constructionDiagnostics.proposedRotation !== null
+                    ? `${Math.round(((constructionDiagnostics.proposedRotation * 180) / Math.PI) % 360)}°`
+                    : 'none'}{' '}
+                  · Jnt:{constructionDiagnostics.explicitJointProposed ? 'YES' : 'NO'} · Sup:
+                  {constructionDiagnostics.supportedContactPredicted ? 'YES' : 'NO'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Rejection / Overlap / Pen:</span>
+                <span className="text-rose-300 truncate max-w-[175px]">
+                  {constructionDiagnostics.placementRejectionReason || 'VALID'} ·{' '}
+                  {constructionDiagnostics.overlapColliderId || 'none'} (
+                  {constructionDiagnostics.penetrationDepth.toFixed(1)}px)
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Decr / Commit / Cancel:</span>
+                <span className="text-slate-300">
+                  Decr: {constructionDiagnostics.inventoryDecrementCountForCurrentInteraction} ·
+                  Commits: {constructionDiagnostics.placementCommitCount} · Cancel:{' '}
+                  {constructionDiagnostics.cancellationReason || 'none'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Cam Suppressed / Snap Rej:</span>
+                <span className="text-orange-300 truncate max-w-[170px]">
+                  CamSup:{' '}
+                  {constructionDiagnostics.cameraMovementSuppressedDuringDrag
+                    ? 'YES'
+                    : 'NO'}{' '}
+                  · {constructionDiagnostics.lastSnapRejectionReason || 'NONE'}
+                </span>
+              </div>
+
+              {/* Rotation Validation Diagnostics */}
+              {constructionDiagnostics.rotationDiagnostics && (
+                <div className="pt-1 mt-1 border-t border-slate-800 space-y-0.5">
+                  <div className="text-[9px] font-bold text-amber-300 uppercase">
+                    Rotation Transaction Validation
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Piece / Accepted:</span>
+                    <span
+                      className={`font-bold ${
+                        constructionDiagnostics.rotationDiagnostics.rotationAccepted
+                          ? 'text-emerald-400'
+                          : 'text-rose-400'
+                      }`}
+                    >
+                      {constructionDiagnostics.rotationDiagnostics.selectedPieceId || 'none'} ·{' '}
+                      {constructionDiagnostics.rotationDiagnostics.rotationAccepted
+                        ? 'ACCEPTED'
+                        : 'REJECTED'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Committed → Proposed:</span>
+                    <span className="text-cyan-300 font-mono">
+                      {Math.round(
+                        (constructionDiagnostics.rotationDiagnostics.currentCommittedAngle * 180) /
+                          Math.PI,
+                      )}
+                      ° →{' '}
+                      {Math.round(
+                        (constructionDiagnostics.rotationDiagnostics.proposedAngle * 180) / Math.PI,
+                      )}
+                      °
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Final / Sweep Overlaps:</span>
+                    <span className="text-amber-200 font-mono">
+                      Final: {constructionDiagnostics.rotationDiagnostics.rotationFinalOverlapCount}{' '}
+                      · Sweep:{' '}
+                      {constructionDiagnostics.rotationDiagnostics.rotationSweepOverlapCount} ·
+                      ConnIncompat:{' '}
+                      {constructionDiagnostics.rotationDiagnostics.connectionIncompatibility
+                        ? 'YES'
+                        : 'NO'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Reason / Collider / Pen:</span>
+                    <span className="text-rose-300 truncate max-w-[175px]">
+                      {constructionDiagnostics.rotationDiagnostics.lastRejectionReason} ·{' '}
+                      {constructionDiagnostics.rotationDiagnostics.conflictingColliderId || 'none'}{' '}
+                      ({constructionDiagnostics.rotationDiagnostics.penetrationDepth.toFixed(1)}px)
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Build-Phase Wisp Presence Diagnostics */}
+              {constructionDiagnostics.wispPresenceDiagnostics && (
+                <div className="pt-1 mt-1 border-t border-slate-800 space-y-0.5">
+                  <div className="text-[9px] font-bold text-teal-300 uppercase">
+                    Wisp Presence Accounting ({constructionDiagnostics.wispPresenceDiagnostics.currentPhase})
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Battlefield / Blocker / Staging:</span>
+                    <span className="text-teal-200 font-bold font-mono">
+                      BF: {constructionDiagnostics.wispPresenceDiagnostics.wispBattlefieldCount} ·
+                      Blk: {constructionDiagnostics.wispPresenceDiagnostics.wispBlockerCount} ·
+                      Stg: {constructionDiagnostics.wispPresenceDiagnostics.wispStagingCount}
+                    </span>
+                  </div>
+                  <div className="space-y-0.5 pt-0.5">
+                    {constructionDiagnostics.wispPresenceDiagnostics.wisps.map((w) => (
+                      <div key={w.wispId} className="flex justify-between text-[8.5px]">
+                        <span className="text-slate-400">{w.wispId.replace('wisp_', '')}:</span>
+                        <span className={w.placed ? 'text-emerald-300' : 'text-slate-400'}>
+                          placed={String(w.placed)} · pos=
+                          {w.position ? `(${Math.round(w.position.x)},${Math.round(w.position.y)})` : 'null'}{' '}
+                          · blk={String(w.blocksConstruction)} · {w.shelterState}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Wisp Placement & Enclosure Validation Diagnostics */}
+              {constructionDiagnostics.wispPlacementDiagnostics && (
+                <div className="pt-1 mt-1 border-t border-slate-800 space-y-0.5">
+                  <div className="text-[9px] font-bold text-cyan-300 uppercase">
+                    Wisp Placement &amp; Enclosure Validation
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Wisp ID / Pos / Bounds:</span>
+                    <span className="text-cyan-200 font-mono">
+                      {constructionDiagnostics.wispPlacementDiagnostics.wispId || 'none'} ·{' '}
+                      {constructionDiagnostics.wispPlacementDiagnostics.wispPosition
+                        ? `(${Math.round(constructionDiagnostics.wispPlacementDiagnostics.wispPosition.x)},${Math.round(constructionDiagnostics.wispPlacementDiagnostics.wispPosition.y)})`
+                        : 'null'}{' '}
+                      · r=
+                      {constructionDiagnostics.wispPlacementDiagnostics.wispColliderBounds?.radius ?? 18}
+                      px
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Clearance / Sealed Enclosure:</span>
+                    <span className="text-emerald-300 font-bold">
+                      {constructionDiagnostics.wispPlacementDiagnostics.localClearanceResult} ·
+                      Sealed: {constructionDiagnostics.wispPlacementDiagnostics.sealedEnclosureAccepted ? 'YES' : 'NO'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Overlap Pieces / Terrain / Wisps:</span>
+                    <span className="text-amber-200 font-mono">
+                      P: {constructionDiagnostics.wispPlacementDiagnostics.overlappingConstructionColliderId || 'none'} ·
+                      T: {constructionDiagnostics.wispPlacementDiagnostics.overlappingTerrainColliderId || 'none'} ·
+                      W: {constructionDiagnostics.wispPlacementDiagnostics.overlappingWispId || 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Sanctuary Bounds / Ext Path:</span>
+                    <span className="text-purple-300 font-mono">
+                      {constructionDiagnostics.wispPlacementDiagnostics.sanctuaryBoundaryResult} ·
+                      ExtPathCheck: {String(constructionDiagnostics.wispPlacementDiagnostics.exteriorPathCheckEnabled)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Warnings / Rejection:</span>
+                    <span className="text-rose-300 truncate max-w-[175px]">
+                      {constructionDiagnostics.wispPlacementDiagnostics.warningClassifications.length > 0
+                        ? `[${constructionDiagnostics.wispPlacementDiagnostics.warningClassifications.join(', ')}]`
+                        : 'NONE'}{' '}
+                      · Rej: {constructionDiagnostics.wispPlacementDiagnostics.lastPlacementRejectionReason || 'VALID'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Timber Joint Diagnostics (20 Fields) */}
+              {constructionDiagnostics.timberJointDiagnostics && (
+                <div className="pt-1 mt-1 border-t border-slate-800 space-y-0.5">
+                  <div className="text-[9px] font-bold text-emerald-300 uppercase">
+                    Timber Joint Telemetry (20 Fields)
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">1-2. Snap On / Drag Piece:</span>
+                    <span className="text-emerald-300 font-bold font-mono">
+                      Snap: {constructionDiagnostics.timberJointDiagnostics.snapEnabled ? 'ON' : 'OFF'} ·{' '}
+                      {constructionDiagnostics.timberJointDiagnostics.activeDraggingPieceId || 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">3-5. Sockets (Src → Tgt):</span>
+                    <span className="text-cyan-300 font-mono truncate max-w-[175px]">
+                      {constructionDiagnostics.timberJointDiagnostics.activeSourceSocketId || 'none'} →{' '}
+                      {constructionDiagnostics.timberJointDiagnostics.activeTargetPieceId || 'none'}.
+                      {constructionDiagnostics.timberJointDiagnostics.activeTargetSocketId || 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">6-8. Dist / Cat / Eligible:</span>
+                    <span className="text-amber-200 font-mono">
+                      {constructionDiagnostics.timberJointDiagnostics.socketWorldDistance !== null
+                        ? `${constructionDiagnostics.timberJointDiagnostics.socketWorldDistance.toFixed(1)}px`
+                        : '---'}{' '}
+                      · {constructionDiagnostics.timberJointDiagnostics.proposedConnectionCategory} ·{' '}
+                      {constructionDiagnostics.timberJointDiagnostics.jointEligibility ? 'ELIGIBLE' : 'NO'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">9-11. Overlap / Pen / Conflict:</span>
+                    <span className="text-rose-300 font-mono truncate max-w-[175px]">
+                      {constructionDiagnostics.timberJointDiagnostics.overlapClassification} ·{' '}
+                      {constructionDiagnostics.timberJointDiagnostics.penetrationDepth.toFixed(1)}px (
+                      {constructionDiagnostics.timberJointDiagnostics.conflictingPieceId || 'none'})
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">12-13. Preferred / Committed Rot:</span>
+                    <span className="text-purple-300 font-mono">
+                      Pref: {Math.round((constructionDiagnostics.timberJointDiagnostics.manualPreferredRotation * 180) / Math.PI)}° ·{' '}
+                      Committed: {Math.round((constructionDiagnostics.timberJointDiagnostics.committedRotation * 180) / Math.PI)}°
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">14. Created Joint ID:</span>
+                    <span className="text-slate-200 font-mono truncate max-w-[175px]">
+                      {constructionDiagnostics.timberJointDiagnostics.createdTimberJointId || 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">15-18. Joints (Act / Int / Str / Brk):</span>
+                    <span className="text-emerald-300 font-bold font-mono">
+                      Act: {constructionDiagnostics.timberJointDiagnostics.activeTimberJointCount} ·{' '}
+                      <span className="text-emerald-400">{constructionDiagnostics.timberJointDiagnostics.intactJointCount}I</span> ·{' '}
+                      <span className="text-amber-400">{constructionDiagnostics.timberJointDiagnostics.strainedJointCount}S</span> ·{' '}
+                      <span className="text-rose-400">{constructionDiagnostics.timberJointDiagnostics.brokenJointCount}B</span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">19. Last Break (Reason / Phase):</span>
+                    <span className="text-rose-300 font-mono truncate max-w-[175px]">
+                      {constructionDiagnostics.timberJointDiagnostics.lastJointBreakReason || 'none'} (
+                      {constructionDiagnostics.timberJointDiagnostics.lastJointBreakAttackOrPhase || '---'})
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">20. Player Feedback Msg:</span>
+                    <span className="text-teal-200 truncate max-w-[175px]" title={constructionDiagnostics.timberJointDiagnostics.playerFriendlyJointMessage || ''}>
+                      {constructionDiagnostics.timberJointDiagnostics.playerFriendlyJointMessage || 'none'}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* 4. Inventory & Piece Condition Categories */}
         <div className="border-t border-slate-800/80 pt-1.5">
@@ -1119,8 +1470,8 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
         )}
 
         {physicsDiagnostics && (
-          <div className="border-t border-indigo-950/80 pt-1.5">
-            <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-300 mb-1">
+          <div className="border-t border-indigo-950/80 pt-1.5 space-y-2">
+            <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-300">
               <Activity className="w-3 h-3 text-indigo-400" />
               <span>LIVE PHYSICS TELEMETRY</span>
             </div>
@@ -1139,6 +1490,55 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
                   {physicsDiagnostics.sleepingBodyCount} sleeping
                 </span>
               </div>
+            </div>
+
+            {/* Wisp–Debris Contact Diagnostics */}
+            <div className="bg-slate-900/90 border border-amber-900/40 rounded p-2 text-[9.5px] space-y-1.5">
+              <div className="flex items-center justify-between font-bold text-amber-300">
+                <span>WISP–DEBRIS CONTACT DIAGNOSTICS</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-200">
+                  {physicsDiagnostics.wispContactEvents?.length ?? 0} events
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-[9px] text-center">
+                <div className="bg-slate-950/60 p-1 rounded border border-slate-800">
+                  <div className="text-slate-400">Harmless</div>
+                  <div className="text-slate-200 font-bold">{physicsDiagnostics.wispHarmlessContactCount ?? 0}</div>
+                </div>
+                <div className="bg-slate-950/60 p-1 rounded border border-slate-800">
+                  <div className="text-rose-400">Debris Hits</div>
+                  <div className="text-rose-300 font-bold">{physicsDiagnostics.wispDebrisHitCount ?? 0}</div>
+                </div>
+                <div className="bg-slate-950/60 p-1 rounded border border-slate-800">
+                  <div className="text-indigo-400">Cosmetic</div>
+                  <div className="text-indigo-300 font-bold">{physicsDiagnostics.wispCosmeticOverlapCount ?? 0}</div>
+                </div>
+              </div>
+
+              {physicsDiagnostics.lastWispContactEvent && (
+                <div className="mt-1 p-1.5 bg-slate-950/80 rounded border border-amber-950/60 text-[8.5px] font-mono space-y-0.5">
+                  <div className="flex justify-between text-amber-200 font-bold">
+                    <span>Latest: {physicsDiagnostics.lastWispContactEvent.wispId}</span>
+                    <span className={physicsDiagnostics.lastWispContactEvent.dispersalCommitted ? 'text-rose-400' : 'text-emerald-400'}>
+                      {physicsDiagnostics.lastWispContactEvent.category}
+                    </span>
+                  </div>
+                  <div className="text-slate-400">
+                    Piece: {physicsDiagnostics.lastWispContactEvent.contactingObjectId} ({physicsDiagnostics.lastWispContactEvent.contactingObjectMaterial}, m={physicsDiagnostics.lastWispContactEvent.contactingObjectMass})
+                  </div>
+                  <div className="text-slate-400">
+                    Speed: lin={physicsDiagnostics.lastWispContactEvent.relativeLinearSpeed} + ang={physicsDiagnostics.lastWispContactEvent.relativeAngularSpeedAtContact} = tot <span className="text-slate-200 font-bold">{physicsDiagnostics.lastWispContactEvent.totalContactSpeed} px/t</span>
+                  </div>
+                  <div className="text-slate-400">
+                    Impulse: N={physicsDiagnostics.lastWispContactEvent.normalImpulse} | T={physicsDiagnostics.lastWispContactEvent.tangentialImpulse} (thresh={physicsDiagnostics.lastWispContactEvent.wispDebrisImpactThreshold})
+                  </div>
+                  {physicsDiagnostics.lastWispContactEvent.notDispersedReason && (
+                    <div className="text-slate-400 italic">
+                      Reason: {physicsDiagnostics.lastWispContactEvent.notDispersedReason}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

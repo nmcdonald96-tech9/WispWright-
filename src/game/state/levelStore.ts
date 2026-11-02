@@ -3,8 +3,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { INITIAL_LEVEL_STATE, MATERIAL_CONFIGS, WORLD_CONFIG } from '../config';
-import { checkOBBOverlap, getOBBFromPiece } from '../math/geometry';
+import {
+  INITIAL_LEVEL_STATE,
+  MATERIAL_CONFIGS,
+  TIMBER_JOINT_CONFIG,
+  WORLD_CONFIG,
+} from '../config';
+import {
+  checkOBBOverlap,
+  createOBB,
+  getOBBFromPiece,
+  getOBBPenetrationDepth,
+  Vec2,
+} from '../math/geometry';
+import {
+  checkPieceOverlapsWisps,
+  evaluateWispProtectionAndRisks,
+  getDefaultWispPosition,
+  validateWispPlacementPosition,
+  WispPlacementValidationResult,
+} from '../math/wispPlacement';
+import {
+  buildTimberJointId,
+  shortestSignedAngleDelta,
+  validatePieceRotationTransaction,
+} from '../math/snapSolver';
 import {
   AuthoritativeTutorialState,
   BullseyeInventoryStatus,
@@ -17,12 +40,18 @@ import {
   LevelState,
   MaterialType,
   PlacedPiece,
+  ProposedTimberJoint,
+  RotationValidationDiagnostics,
   SnapshotType,
   SuggestedPlacementRegion,
+  TimberJoint,
   TutorialChecklistState,
   TutorialHighlightTargetId,
   UnlockState,
   Vector2,
+  WispPlacementDiagnostics,
+  WispPlacementPhase,
+  WispPresenceDiagnostics,
 } from '../types';
 
 const STORAGE_KEY = 'alchemical_fortress_phase1_save_v1';
@@ -55,6 +84,8 @@ export interface SavedSessionMeta {
   beginSiegeHighlightOnce?: boolean;
   unstableHint?: string | null;
   currentGuidedStep?: GuidedTutorialStep;
+  wispPlacementPhase?: WispPlacementPhase;
+  wispsRequiredBeforeSiege?: boolean;
 }
 
 function deepClone<T>(obj: T): T {
@@ -66,7 +97,9 @@ export class LevelStore {
   private preTestSnapshot: LevelState | null = null;
   private snapshots: Record<SnapshotType, LevelState | null> = {
     LEVEL_TEMPLATE: deepClone(INITIAL_LEVEL_STATE),
+    STABLE_BUILD: null,
     INITIAL_DESIGN: null,
+    PRE_SIEGE_WISPS: null,
     POST_ATTACK_1: null,
     REINFORCEMENT_ENTRY: null,
     REINFORCEMENT_COMPLETE: null,
@@ -81,6 +114,16 @@ export class LevelStore {
 
   public isReinforcementMode = false;
   public savedPhase: GameMode = 'CONSTRUCTION';
+  public wispPlacementPhase: WispPlacementPhase = 'STAGED_IN_BUILD';
+  public wispsRequiredBeforeSiege = false;
+  public lastRotationDiagnostics: RotationValidationDiagnostics | null = null;
+  public lastDefaultSlotPlacementReport: {
+    placedCount: number;
+    unplacedWispIds: string[];
+    unplacedWispNames: string[];
+    message: string | null;
+  } | null = null;
+  public lastWispPlacementDiagnostics: WispPlacementDiagnostics | null = null;
 
   // Guaranteed Mentor Delivery tracking
   public deliveryGranted = false;
@@ -131,7 +174,36 @@ export class LevelStore {
     this.state = this.loadFromStorage();
     this.loadUnlockState();
     this.loadSessionMeta();
+    this.normalizeBuildPhaseWisps();
     this.validatePersistedTutorialAgainstDesign();
+    this.recomputeAllWispProtection();
+  }
+
+  private normalizeBuildPhaseWisps(): void {
+    const isBuildMode =
+      this.savedPhase === 'CONSTRUCTION' ||
+      this.savedPhase === 'INITIAL_CONSTRUCTION' ||
+      this.savedPhase === 'TESTING_SIMULATION' ||
+      this.savedPhase === 'SETTLED';
+    if (
+      isBuildMode ||
+      this.wispPlacementPhase === 'STAGED_IN_BUILD' ||
+      this.wispPlacementPhase === 'RESERVED_IN_BUILD'
+    ) {
+      if (
+        this.savedPhase !== 'PLACE_WISPS' &&
+        this.savedPhase !== 'PRE_SIEGE_REVIEW' &&
+        !this.isReinforcementMode &&
+        this.wispPlacementPhase !== 'LOCKED_FOR_SIEGE'
+      ) {
+        this.wispPlacementPhase = 'STAGED_IN_BUILD';
+        for (const w of this.state.wisps) {
+          w.placed = false;
+          w.isValid = false;
+          w.validationReason = null;
+        }
+      }
+    }
   }
 
   public getState(): LevelState {
@@ -554,6 +626,7 @@ export class LevelStore {
     this.beginSiegeHighlightOnce = true;
     this.unstableHint = null;
     this.lastChecklistRecomputationReason = `STABLE_DESIGN_ACCEPTED_REV_${this.currentConstructionRevision}`;
+    this.saveNamedSnapshot('STABLE_BUILD');
     this.notify();
     return true;
   }
@@ -567,6 +640,7 @@ export class LevelStore {
         this.stabilityTestRestoredOrAccepted = true;
         this.completionPresented = true;
         this.beginSiegeHighlightOnce = true;
+        this.saveNamedSnapshot('STABLE_BUILD');
       }
       this.lastChecklistRecomputationReason = `STABILITY_TEST_ACCEPTED_REV_${this.currentConstructionRevision}`;
       this.notify();
@@ -721,6 +795,20 @@ export class LevelStore {
     canRemoveToInventory: boolean;
     reason?: string;
   } {
+    if (
+      !this.isReinforcementMode &&
+      (this.savedPhase === 'PLACE_WISPS' ||
+        this.savedPhase === 'PRE_SIEGE_REVIEW' ||
+        this.wispPlacementPhase === 'PLACE_WISPS' ||
+        this.wispPlacementPhase === 'PRE_SIEGE_REVIEW')
+    ) {
+      return {
+        canMove: false,
+        canRotate: false,
+        canRemoveToInventory: false,
+        reason: 'Construction pieces are locked during wisp placement. Tap Return to Build to edit your fortress.',
+      };
+    }
     if (piece.isPrebuilt && piece.ownership !== 'PREBUILT_MOVABLE') {
       return {
         canMove: false,
@@ -825,6 +913,16 @@ export class LevelStore {
     if (active) {
       this.reinforcementUndoStack = [];
       this.reinforcementRedoStack = [];
+      this.wispPlacementPhase = 'LOCKED_FOR_SIEGE';
+      if (this.savedPhase === 'PLACE_WISPS' || this.savedPhase === 'PRE_SIEGE_REVIEW') {
+        this.savedPhase = 'REINFORCEMENT_ACTIVE';
+      }
+      if (this.state.wisps.every((w) => w.placed !== true)) {
+        for (const w of this.state.wisps) {
+          w.placed = true;
+          w.isValid = true;
+        }
+      }
     }
     this.notify();
   }
@@ -837,7 +935,11 @@ export class LevelStore {
     return this.isReinforcementMode ? this.reinforcementRedoStack : this.redoStack;
   }
 
-  public placePiece(piece: PlacedPiece, recordUndo = true): boolean {
+  public placePiece(
+    piece: PlacedPiece,
+    recordUndo = true,
+    proposedJoint?: ProposedTimberJoint | null,
+  ): boolean {
     // Enforce One Active Bullseye Limit: never allow more than one Bullseye Block on the battlefield
     if (piece.type === 'bullseye_block') {
       const existingBullseye = this.state.pieces.find(
@@ -853,6 +955,12 @@ export class LevelStore {
 
     const currentCount = this.state.inventory[piece.type] ?? 0;
     if (currentCount <= 0) return false;
+
+    // Enforce wisp clearance: committed construction pieces may not overlap placed or reserved wisps
+    const pieceOBB = getOBBFromPiece(piece);
+    if (checkPieceOverlapsWisps(pieceOBB, this.state.wisps).overlaps) {
+      return false;
+    }
 
     const fromDelivered =
       this.isReinforcementMode && (this.deliveredInventory[piece.type] || 0) > 0;
@@ -902,18 +1010,132 @@ export class LevelStore {
       this.state.pieces.push(enrichedPiece);
     }
 
+    const createdJoints: TimberJoint[] = [];
+    if (proposedJoint && piece.type === 'wood_beam') {
+      const created = this.createOrUpdateTimberJointFromProposal(resolvedId, proposedJoint);
+      if (created) {
+        createdJoints.push(deepClone(created));
+      }
+    }
+
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'PLACE_PIECE',
         piece: deepClone(this.state.pieces[this.state.pieces.length - 1]),
         fromDelivered,
+        ...(createdJoints.length > 0 ? { createdJoints } : {}),
       });
       this.getActiveRedoStack().length = 0;
     }
 
     this.incrementConstructionRevision(`PLACE_PIECE_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
     this.notify();
     return true;
+  }
+
+  public getJoints(customState?: LevelState): TimberJoint[] {
+    const target = customState ?? this.state;
+    if (!target.joints) {
+      target.joints = [];
+    }
+    return target.joints;
+  }
+
+  public getJointsForPiece(pieceId: string, includeBroken = false): TimberJoint[] {
+    const joints = this.getJoints();
+    return joints.filter(
+      (j) =>
+        (includeBroken || j.state !== 'BROKEN') &&
+        (j.pieceAId === pieceId || j.pieceBId === pieceId),
+    );
+  }
+
+  public lastCreatedTimberJointId: string | null = null;
+  public lastBrokenTimberJointReason: string | null = null;
+  public lastBrokenTimberJointPhaseOrAttack: string | null = null;
+
+  public createOrUpdateTimberJointFromProposal(
+    sourcePieceId: string,
+    proposal: ProposedTimberJoint,
+  ): TimberJoint | null {
+    const sourcePiece = this.state.pieces.find((p) => p.id === sourcePieceId);
+    const targetPiece = this.state.pieces.find((p) => p.id === proposal.targetPieceId);
+    if (
+      !sourcePiece ||
+      !targetPiece ||
+      sourcePiece.type !== 'wood_beam' ||
+      targetPiece.type !== 'wood_beam' ||
+      sourcePiece.condition === 'BROKEN' ||
+      sourcePiece.condition === 'LOST' ||
+      targetPiece.condition === 'BROKEN' ||
+      targetPiece.condition === 'LOST'
+    ) {
+      return null;
+    }
+
+    const joints = this.getJoints();
+    const jointId = buildTimberJointId(
+      sourcePieceId,
+      proposal.sourceSocketName,
+      proposal.targetPieceId,
+      proposal.targetSocketName,
+    );
+
+    // Check if an active joint already connects these two pieces
+    const existingIdx = joints.findIndex(
+      (j) =>
+        j.state !== 'BROKEN' &&
+        (j.jointId === jointId ||
+          (j.pieceAId === sourcePieceId && j.pieceBId === proposal.targetPieceId) ||
+          (j.pieceAId === proposal.targetPieceId && j.pieceBId === sourcePieceId)),
+    );
+
+    const newJoint: TimberJoint = {
+      jointId,
+      jointType: proposal.jointType,
+      pieceAId: sourcePieceId,
+      pieceBId: proposal.targetPieceId,
+      socketAId: `${sourcePieceId}_${proposal.sourceSocketName}`,
+      socketBId: `${proposal.targetPieceId}_${proposal.targetSocketName}`,
+      localAnchorA: { ...proposal.localAnchorA },
+      localAnchorB: { ...proposal.localAnchorB },
+      worldPosition: { ...proposal.worldPosition },
+      restAngle: proposal.restAngle,
+      restSeparation: proposal.restSeparation,
+      strengthProfile: proposal.strengthProfile || 'standard_timber_joint',
+      state: 'INTACT',
+      currentStress: 0,
+      maxStressObserved: 0,
+      createdInPhase: this.isReinforcementMode ? 'REINFORCEMENT' : 'BUILD',
+      brokenInPhase: null,
+      brokenByAttackId: null,
+      failureReason: null,
+    };
+
+    if (existingIdx !== -1) {
+      joints[existingIdx] = newJoint;
+    } else {
+      joints.push(newJoint);
+    }
+
+    this.lastCreatedTimberJointId = newJoint.jointId;
+    return newJoint;
+  }
+
+  private replaceJointsForPiece(pieceId: string, replacementJoints: TimberJoint[]): void {
+    const joints = this.getJoints();
+    const filtered = joints.filter(
+      (j) => j.pieceAId !== pieceId && j.pieceBId !== pieceId,
+    );
+    const seenIds = new Set(filtered.map((j) => j.jointId));
+    for (const rj of replacementJoints) {
+      if (!seenIds.has(rj.jointId)) {
+        seenIds.add(rj.jointId);
+        filtered.push(deepClone(rj));
+      }
+    }
+    this.state.joints = filtered;
   }
 
   public removePiece(pieceId: string, recordUndo = true): boolean {
@@ -923,6 +1145,16 @@ export class LevelStore {
     const piece = this.state.pieces[index];
     const eligibility = this.canManipulatePiece(piece);
     if (!eligibility.canRemoveToInventory) return false;
+
+    const joints = this.getJoints();
+    const removedJoints = deepClone(
+      joints.filter((j) => j.pieceAId === pieceId || j.pieceBId === pieceId),
+    );
+    if (removedJoints.length > 0) {
+      this.state.joints = joints.filter(
+        (j) => j.pieceAId !== pieceId && j.pieceBId !== pieceId,
+      );
+    }
 
     this.state.pieces.splice(index, 1);
     this.state.inventory[piece.type] = (this.state.inventory[piece.type] ?? 0) + 1;
@@ -946,14 +1178,19 @@ export class LevelStore {
         type: 'REMOVE_PIECE',
         piece: deepClone(piece),
         toDelivered: wasDelivered,
+        ...(removedJoints.length > 0 ? { removedJoints } : {}),
       });
       this.getActiveRedoStack().length = 0;
     }
 
-    if (piece.type === 'wood_beam' && !this.state.pieces.some((p) => !p.isPrebuilt && p.type === 'wood_beam')) {
+    if (
+      piece.type === 'wood_beam' &&
+      !this.state.pieces.some((p) => !p.isPrebuilt && p.type === 'wood_beam')
+    ) {
       this.beamSelectedInInventory = false;
     }
     this.incrementConstructionRevision(`REMOVE_PIECE_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
     this.notify();
     return true;
   }
@@ -964,6 +1201,7 @@ export class LevelStore {
     newRotationOrAnchor?: number | string,
     newAnchorId?: string,
     recordUndo = true,
+    proposedJoint?: ProposedTimberJoint | null,
   ): boolean {
     const piece = this.state.pieces.find((p) => p.id === pieceId);
     if (!piece) return false;
@@ -980,9 +1218,87 @@ export class LevelStore {
     const afterAnchorId =
       typeof newRotationOrAnchor === 'string' ? newRotationOrAnchor : newAnchorId;
 
+    // Enforce wisp clearance on move
+    const cfg = MATERIAL_CONFIGS[piece.type];
+    const candidateOBB = createOBB(newPos, cfg.width, cfg.height, afterRot);
+    if (checkPieceOverlapsWisps(candidateOBB, this.state.wisps).overlaps) {
+      return false;
+    }
+
+    // Validate against overlapping other pieces
+    for (const other of this.state.pieces) {
+      if (other.id === pieceId || other.condition === 'LOST') continue;
+      const oCfg = MATERIAL_CONFIGS[other.type];
+      const oOBB = createOBB(other.position, oCfg.width, oCfg.height, other.rotation);
+      const tol =
+        proposedJoint && other.id === proposedJoint.targetPieceId ? 0.05 : 2.5;
+      if (getOBBPenetrationDepth(candidateOBB, oOBB, tol) > 0) {
+        return false;
+      }
+    }
+
+    // Validate existing active TimberJoints on this piece:
+    // Moving a connected beam must either update the joint via proposedJoint or keep the connected
+    // sockets within valid clearance (never stretching a joint across arbitrary distance).
+    const beforeJoints = deepClone(this.getJointsForPiece(pieceId, true));
+    const activeConnectedJoints = this.getJointsForPiece(pieceId, false);
+
+    for (const joint of activeConnectedJoints) {
+      const isPieceA = joint.pieceAId === pieceId;
+      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
+      if (proposedJoint && proposedJoint.targetPieceId === partnerId) {
+        continue; // Will be updated cleanly by proposedJoint below
+      }
+      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
+      if (!partnerPiece) continue;
+
+      const myLocalAnchor = isPieceA ? joint.localAnchorA : joint.localAnchorB;
+      const partnerLocalAnchor = isPieceA ? joint.localAnchorB : joint.localAnchorA;
+      const newWorldSocket = Vec2.add(newPos, Vec2.rotate(myLocalAnchor, afterRot));
+      const partnerWorldSocket = Vec2.add(
+        partnerPiece.position,
+        Vec2.rotate(partnerLocalAnchor, partnerPiece.rotation),
+      );
+      const newSeparation = Vec2.distance(newWorldSocket, partnerWorldSocket);
+
+      if (newSeparation > TIMBER_JOINT_CONFIG.maxAngledSocketClearance + 1.5) {
+        return false; // Reject incompatible move that would stretch the joint without detaching
+      }
+    }
+
     piece.position = { ...newPos };
     piece.rotation = afterRot;
     piece.attachedAnchorId = afterAnchorId;
+
+    // Update existing joints that remained within clearance
+    for (const joint of activeConnectedJoints) {
+      const isPieceA = joint.pieceAId === pieceId;
+      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
+      if (proposedJoint && proposedJoint.targetPieceId === partnerId) continue;
+      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
+      if (!partnerPiece) continue;
+
+      const worldSocketA = Vec2.add(
+        isPieceA ? newPos : partnerPiece.position,
+        Vec2.rotate(joint.localAnchorA, isPieceA ? afterRot : partnerPiece.rotation),
+      );
+      const worldSocketB = Vec2.add(
+        isPieceA ? partnerPiece.position : newPos,
+        Vec2.rotate(joint.localAnchorB, isPieceA ? partnerPiece.rotation : afterRot),
+      );
+      joint.restSeparation = Number(Vec2.distance(worldSocketA, worldSocketB).toFixed(2));
+      joint.restAngle = shortestSignedAngleDelta(
+        isPieceA ? afterRot : partnerPiece.rotation,
+        isPieceA ? partnerPiece.rotation : afterRot,
+      );
+      joint.worldPosition = Vec2.scale(Vec2.add(worldSocketA, worldSocketB), 0.5);
+    }
+
+    if (proposedJoint && piece.type === 'wood_beam') {
+      this.createOrUpdateTimberJointFromProposal(pieceId, proposedJoint);
+    }
+
+    const afterJoints = deepClone(this.getJointsForPiece(pieceId, true));
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
@@ -994,11 +1310,122 @@ export class LevelStore {
         afterPos: { ...newPos },
         afterRot,
         afterAnchorId,
+        ...(beforeJoints.length > 0 || afterJoints.length > 0
+          ? { beforeJoints, afterJoints }
+          : {}),
       });
       this.getActiveRedoStack().length = 0;
     }
 
     this.incrementConstructionRevision(`MOVE_PIECE_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
+    this.notify();
+    return true;
+  }
+
+  public validatePieceRotation(
+    pieceId: string,
+    proposedAngle: number,
+  ): RotationValidationDiagnostics {
+    const piece = this.state.pieces.find((p) => p.id === pieceId);
+    if (!piece) {
+      return {
+        selectedPieceId: pieceId,
+        currentCommittedAngle: 0,
+        proposedAngle,
+        rotationFinalOverlapCount: 1,
+        rotationSweepOverlapCount: 0,
+        conflictingColliderId: null,
+        penetrationDepth: 0,
+        connectionIncompatibility: false,
+        rotationAccepted: false,
+        lastRejectionReason: 'PIECE_OVERLAP',
+        playerFriendlyMessage: 'Piece not found.',
+        timestamp: Date.now(),
+      };
+    }
+    const normalizedTarget = this.normalizeAngle(proposedAngle);
+    return validatePieceRotationTransaction(
+      piece,
+      normalizedTarget,
+      this.state.pieces,
+      this.state.anchors,
+      this.state.wisps,
+      this.getJoints(),
+    );
+  }
+
+  public detachTimberJoints(
+    pieceId: string,
+    specificJointId?: string,
+    recordUndo = true,
+  ): boolean {
+    const piece = this.state.pieces.find((p) => p.id === pieceId);
+    if (!piece) return false;
+
+    const eligibility = this.canManipulatePiece(piece);
+    if (!eligibility.canMove && !eligibility.canRotate) return false;
+
+    const joints = this.getJoints();
+    const toRemove = joints.filter(
+      (j) =>
+        j.state !== 'BROKEN' &&
+        (j.pieceAId === pieceId || j.pieceBId === pieceId) &&
+        (!specificJointId || j.jointId === specificJointId),
+    );
+    if (toRemove.length === 0) return false;
+
+    const removedJoints = deepClone(toRemove);
+    const removedIds = new Set(removedJoints.map((j) => j.jointId));
+    this.state.joints = joints.filter((j) => !removedIds.has(j.jointId));
+    this.lastRotationDiagnostics = null;
+
+    if (recordUndo) {
+      this.getActiveUndoStack().push({
+        type: 'DETACH_JOINT',
+        pieceId,
+        removedJoints,
+      });
+      this.getActiveRedoStack().length = 0;
+    }
+
+    this.incrementConstructionRevision(`DETACH_TIMBER_JOINT_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
+    this.notify();
+    return true;
+  }
+
+  public detachPieceConnection(pieceId: string, recordUndo = true): boolean {
+    const piece = this.state.pieces.find((p) => p.id === pieceId);
+    if (!piece) return false;
+
+    if (!piece.attachedAnchorId) {
+      return this.detachTimberJoints(pieceId, undefined, recordUndo);
+    }
+
+    const eligibility = this.canManipulatePiece(piece);
+    if (!eligibility.canMove && !eligibility.canRotate) return false;
+
+    const beforeAnchorId = piece.attachedAnchorId;
+    piece.attachedAnchorId = undefined;
+    this.lastRotationDiagnostics = null;
+
+    if (recordUndo) {
+      this.getActiveUndoStack().push({
+        type: 'MOVE_PIECE',
+        pieceId,
+        beforePos: { ...piece.position },
+        beforeRot: piece.rotation,
+        beforeAnchorId,
+        afterPos: { ...piece.position },
+        afterRot: piece.rotation,
+        afterAnchorId: undefined,
+      });
+      this.getActiveRedoStack().length = 0;
+    }
+
+    this.incrementConstructionRevision(`DETACH_CONNECTION_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
     this.notify();
     return true;
   }
@@ -1014,7 +1441,51 @@ export class LevelStore {
     const beforeAnchorId = piece.attachedAnchorId;
     const afterRotation = this.normalizeAngle(beforeRotation + deltaAngle);
 
+    const diag = validatePieceRotationTransaction(
+      piece,
+      afterRotation,
+      this.state.pieces,
+      this.state.anchors,
+      this.state.wisps,
+      this.getJoints(),
+    );
+    this.lastRotationDiagnostics = diag;
+
+    if (!diag.rotationAccepted) {
+      this.listeners.forEach((fn) => fn());
+      return false;
+    }
+
+    const beforeJoints = deepClone(this.getJointsForPiece(pieceId, true));
+
     piece.rotation = afterRotation;
+    piece.preferredRotation = afterRotation;
+    piece.rotationSource = 'USER';
+    piece.manualRotationRevision = (piece.manualRotationRevision ?? 0) + 1;
+
+    // Update any active timber joints that remained within valid socket clearance
+    for (const joint of this.getJointsForPiece(pieceId, false)) {
+      const isPieceA = joint.pieceAId === pieceId;
+      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
+      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
+      if (!partnerPiece) continue;
+      const worldSocketA = Vec2.add(
+        isPieceA ? piece.position : partnerPiece.position,
+        Vec2.rotate(joint.localAnchorA, isPieceA ? afterRotation : partnerPiece.rotation),
+      );
+      const worldSocketB = Vec2.add(
+        isPieceA ? partnerPiece.position : piece.position,
+        Vec2.rotate(joint.localAnchorB, isPieceA ? partnerPiece.rotation : afterRotation),
+      );
+      joint.restSeparation = Number(Vec2.distance(worldSocketA, worldSocketB).toFixed(2));
+      joint.restAngle = shortestSignedAngleDelta(
+        isPieceA ? afterRotation : partnerPiece.rotation,
+        isPieceA ? partnerPiece.rotation : afterRotation,
+      );
+      joint.worldPosition = Vec2.scale(Vec2.add(worldSocketA, worldSocketB), 0.5);
+    }
+
+    const afterJoints = deepClone(this.getJointsForPiece(pieceId, true));
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
@@ -1024,11 +1495,15 @@ export class LevelStore {
         afterRotation,
         beforeAnchorId,
         afterAnchorId: beforeAnchorId,
+        ...(beforeJoints.length > 0 || afterJoints.length > 0
+          ? { beforeJoints, afterJoints }
+          : {}),
       });
       this.getActiveRedoStack().length = 0;
     }
 
     this.incrementConstructionRevision(`ROTATE_PIECE_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
     this.notify();
     return true;
   }
@@ -1044,7 +1519,50 @@ export class LevelStore {
     const afterRotation = this.normalizeAngle(targetRotation);
     if (Math.abs(beforeRotation - afterRotation) < 0.001) return false;
 
+    const diag = validatePieceRotationTransaction(
+      piece,
+      afterRotation,
+      this.state.pieces,
+      this.state.anchors,
+      this.state.wisps,
+      this.getJoints(),
+    );
+    this.lastRotationDiagnostics = diag;
+
+    if (!diag.rotationAccepted) {
+      this.listeners.forEach((fn) => fn());
+      return false;
+    }
+
+    const beforeJoints = deepClone(this.getJointsForPiece(pieceId, true));
+
     piece.rotation = afterRotation;
+    piece.preferredRotation = afterRotation;
+    piece.rotationSource = 'USER';
+    piece.manualRotationRevision = (piece.manualRotationRevision ?? 0) + 1;
+
+    for (const joint of this.getJointsForPiece(pieceId, false)) {
+      const isPieceA = joint.pieceAId === pieceId;
+      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
+      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
+      if (!partnerPiece) continue;
+      const worldSocketA = Vec2.add(
+        isPieceA ? piece.position : partnerPiece.position,
+        Vec2.rotate(joint.localAnchorA, isPieceA ? afterRotation : partnerPiece.rotation),
+      );
+      const worldSocketB = Vec2.add(
+        isPieceA ? partnerPiece.position : piece.position,
+        Vec2.rotate(joint.localAnchorB, isPieceA ? partnerPiece.rotation : afterRotation),
+      );
+      joint.restSeparation = Number(Vec2.distance(worldSocketA, worldSocketB).toFixed(2));
+      joint.restAngle = shortestSignedAngleDelta(
+        isPieceA ? afterRotation : partnerPiece.rotation,
+        isPieceA ? partnerPiece.rotation : afterRotation,
+      );
+      joint.worldPosition = Vec2.scale(Vec2.add(worldSocketA, worldSocketB), 0.5);
+    }
+
+    const afterJoints = deepClone(this.getJointsForPiece(pieceId, true));
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
@@ -1054,11 +1572,15 @@ export class LevelStore {
         afterRotation,
         beforeAnchorId: piece.attachedAnchorId,
         afterAnchorId: piece.attachedAnchorId,
+        ...(beforeJoints.length > 0 || afterJoints.length > 0
+          ? { beforeJoints, afterJoints }
+          : {}),
       });
       this.getActiveRedoStack().length = 0;
     }
 
     this.incrementConstructionRevision(`SET_ROTATION_${piece.type.toUpperCase()}`);
+    this.recomputeAllWispProtection();
     this.notify();
     return true;
   }
@@ -1095,6 +1617,8 @@ export class LevelStore {
     const action = activeUndo.pop();
     if (!action) return false;
 
+    const joints = this.getJoints();
+
     switch (action.type) {
       case 'PLACE_PIECE': {
         const idx = this.state.pieces.findIndex((p) => p.id === action.piece.id);
@@ -1111,6 +1635,19 @@ export class LevelStore {
           if (this.isReinforcementMode) {
             this.reinforcementMaterialsUsed = Math.max(0, this.reinforcementMaterialsUsed - 1);
           }
+        }
+        if (action.createdJoints && action.createdJoints.length > 0) {
+          const createdIds = new Set(action.createdJoints.map((j) => j.jointId));
+          this.state.joints = joints.filter(
+            (j) =>
+              !createdIds.has(j.jointId) &&
+              j.pieceAId !== action.piece.id &&
+              j.pieceBId !== action.piece.id,
+          );
+        } else {
+          this.state.joints = joints.filter(
+            (j) => j.pieceAId !== action.piece.id && j.pieceBId !== action.piece.id,
+          );
         }
         break;
       }
@@ -1130,6 +1667,15 @@ export class LevelStore {
           if (this.isReinforcementMode) {
             this.reinforcementMaterialsUsed++;
           }
+          if (action.removedJoints && action.removedJoints.length > 0) {
+            const existingIds = new Set(joints.map((j) => j.jointId));
+            for (const rj of action.removedJoints) {
+              if (!existingIds.has(rj.jointId)) {
+                existingIds.add(rj.jointId);
+                joints.push(deepClone(rj));
+              }
+            }
+          }
         }
         break;
       }
@@ -1140,6 +1686,9 @@ export class LevelStore {
           p.rotation = action.beforeRot;
           p.attachedAnchorId = action.beforeAnchorId;
         }
+        if (action.beforeJoints !== undefined || action.afterJoints !== undefined) {
+          this.replaceJointsForPiece(action.pieceId, action.beforeJoints ?? []);
+        }
         break;
       }
       case 'ROTATE_PIECE': {
@@ -1147,6 +1696,19 @@ export class LevelStore {
         if (p) {
           p.rotation = action.beforeRotation;
           p.attachedAnchorId = action.beforeAnchorId;
+        }
+        if (action.beforeJoints !== undefined || action.afterJoints !== undefined) {
+          this.replaceJointsForPiece(action.pieceId, action.beforeJoints ?? []);
+        }
+        break;
+      }
+      case 'DETACH_JOINT': {
+        const existingIds = new Set(joints.map((j) => j.jointId));
+        for (const rj of action.removedJoints) {
+          if (!existingIds.has(rj.jointId)) {
+            existingIds.add(rj.jointId);
+            joints.push(deepClone(rj));
+          }
         }
         break;
       }
@@ -1164,6 +1726,8 @@ export class LevelStore {
     const action = activeRedo.pop();
     if (!action) return false;
 
+    const joints = this.getJoints();
+
     switch (action.type) {
       case 'PLACE_PIECE': {
         const currentInv = this.state.inventory[action.piece.type] ?? 0;
@@ -1180,6 +1744,15 @@ export class LevelStore {
           }
           if (this.isReinforcementMode) {
             this.reinforcementMaterialsUsed++;
+          }
+          if (action.createdJoints && action.createdJoints.length > 0) {
+            const existingIds = new Set(joints.map((j) => j.jointId));
+            for (const cj of action.createdJoints) {
+              if (!existingIds.has(cj.jointId)) {
+                existingIds.add(cj.jointId);
+                joints.push(deepClone(cj));
+              }
+            }
           }
         }
         break;
@@ -1200,6 +1773,9 @@ export class LevelStore {
             this.reinforcementMaterialsUsed = Math.max(0, this.reinforcementMaterialsUsed - 1);
           }
         }
+        this.state.joints = joints.filter(
+          (j) => j.pieceAId !== action.piece.id && j.pieceBId !== action.piece.id,
+        );
         break;
       }
       case 'MOVE_PIECE': {
@@ -1209,6 +1785,9 @@ export class LevelStore {
           p.rotation = action.afterRot;
           p.attachedAnchorId = action.afterAnchorId;
         }
+        if (action.beforeJoints !== undefined || action.afterJoints !== undefined) {
+          this.replaceJointsForPiece(action.pieceId, action.afterJoints ?? []);
+        }
         break;
       }
       case 'ROTATE_PIECE': {
@@ -1217,6 +1796,14 @@ export class LevelStore {
           p.rotation = action.afterRotation;
           p.attachedAnchorId = action.afterAnchorId;
         }
+        if (action.beforeJoints !== undefined || action.afterJoints !== undefined) {
+          this.replaceJointsForPiece(action.pieceId, action.afterJoints ?? []);
+        }
+        break;
+      }
+      case 'DETACH_JOINT': {
+        const removedIds = new Set(action.removedJoints.map((j) => j.jointId));
+        this.state.joints = joints.filter((j) => !removedIds.has(j.jointId));
         break;
       }
     }
@@ -1262,6 +1849,334 @@ export class LevelStore {
     const piece = this.getPlacedBullseyePiece();
     if (!piece) return;
     piece.overrideCancellationReason = reason;
+  }
+
+  // --- Post-Stability Wisp Placement & Protection Feedback ---
+
+  public recomputeAllWispProtection(customState?: LevelState): void {
+    const target = customState ?? this.state;
+    for (const w of target.wisps) {
+      if (!w.defaultPosition) {
+        w.defaultPosition = getDefaultWispPosition(w.id);
+      }
+      if (w.isDispersed || w.placed === false) {
+        w.shelterStatus = 'Exposed';
+        w.sharedCollapseRisk = false;
+        w.heavyOverheadHazard = false;
+        w.protectionTags = ['Exposed'];
+        w.hazardWarning = null;
+        continue;
+      }
+      const validation = validateWispPlacementPosition(
+        w.id,
+        w.position,
+        target.wisps,
+        target.pieces,
+        target.anchors,
+      );
+      w.isValid = validation.isValid;
+      w.validationReason = validation.rejectionCode;
+      const evaluation = evaluateWispProtectionAndRisks(
+        w.position,
+        w.id,
+        target.wisps,
+        target.pieces,
+      );
+      w.shelterStatus = evaluation.shelterStatus;
+      w.sharedCollapseRisk = evaluation.sharedCollapseRisk;
+      w.heavyOverheadHazard = evaluation.heavyOverheadHazard;
+      w.limitedClearance = evaluation.limitedClearance;
+      w.elevatedChamber = evaluation.elevatedChamber;
+      w.protectionTags = evaluation.protectionTags;
+      w.hazardWarning = evaluation.hazardWarning;
+    }
+  }
+
+  public getWispPresenceDiagnostics(currentMode?: string): WispPresenceDiagnostics {
+    const phase = currentMode ?? this.savedPhase;
+    const battlefieldWisps = this.state.wisps.filter(
+      (w) => w.placed === true && !w.isDispersed,
+    );
+    const stagingWisps = this.state.wisps.filter((w) => w.placed !== true);
+    return {
+      currentPhase: phase,
+      wispBattlefieldCount: battlefieldWisps.length,
+      wispBlockerCount: battlefieldWisps.length,
+      wispStagingCount: stagingWisps.length,
+      wisps: this.state.wisps.map((w) => {
+        const placed = w.placed === true && !w.isDispersed;
+        return {
+          wispId: w.id,
+          placed,
+          position: placed ? { ...w.position } : null,
+          hasActiveCollider: placed,
+          blocksConstruction: placed,
+          shelterState: w.isDispersed
+            ? 'Dispersed'
+            : placed
+              ? (w.shelterStatus ?? 'Exposed')
+              : 'Unplaced',
+        };
+      }),
+    };
+  }
+
+  public enterPlaceWispsPhase(stageWisps = true): void {
+    this.wispPlacementPhase = 'PLACE_WISPS';
+    this.savedPhase = 'PLACE_WISPS';
+    this.wispsRequiredBeforeSiege = true;
+    this.lastDefaultSlotPlacementReport = null;
+    this.lastRotationDiagnostics = null;
+    this.lastWispPlacementDiagnostics = null;
+    for (const w of this.state.wisps) {
+      w.isDispersed = false;
+      w.defaultPosition = w.defaultPosition ?? getDefaultWispPosition(w.id);
+      if (stageWisps) {
+        w.placed = false;
+        w.isValid = false;
+        w.validationReason = null;
+      } else {
+        const val = validateWispPlacementPosition(
+          w.id,
+          w.position,
+          this.state.wisps,
+          this.state.pieces,
+          this.state.anchors,
+        );
+        w.placed = val.isValid;
+        w.isValid = val.isValid;
+        w.validationReason = val.rejectionCode;
+      }
+    }
+    this.recomputeAllWispProtection();
+    this.saveNamedSnapshot('STABLE_BUILD');
+    this.saveNamedSnapshot('INITIAL_DESIGN');
+    this.notify();
+  }
+
+  public validateWispPlacement(
+    wispId: string,
+    pos: Vector2,
+  ): WispPlacementValidationResult {
+    const res = validateWispPlacementPosition(
+      wispId,
+      pos,
+      this.state.wisps,
+      this.state.pieces,
+      this.state.anchors,
+    );
+    this.lastWispPlacementDiagnostics = res.diagnostics ?? null;
+    return res;
+  }
+
+  public placeWisp(
+    wispId: string,
+    pos: Vector2,
+  ): { success: boolean; validation: WispPlacementValidationResult } {
+    if (this.isReinforcementMode) {
+      const failDiag: WispPlacementDiagnostics = {
+        wispId,
+        wispPosition: { ...pos },
+        wispColliderBounds: null,
+        localClearanceResult: 'CLEAR',
+        overlappingConstructionColliderId: null,
+        overlappingTerrainColliderId: null,
+        overlappingWispId: null,
+        sanctuaryBoundaryResult: 'OUTSIDE',
+        warningClassifications: [],
+        exteriorPathCheckEnabled: false,
+        sealedEnclosureAccepted: false,
+        lastPlacementRejectionReason: 'OUTSIDE_SANCTUARY_ZONE',
+        playerFriendlyMessage: 'Surviving wisps cannot be moved during reinforcement.',
+        timestamp: Date.now(),
+      };
+      this.lastWispPlacementDiagnostics = failDiag;
+      return {
+        success: false,
+        validation: {
+          isValid: false,
+          rejectionCode: 'OUTSIDE_SANCTUARY_ZONE',
+          playerFriendlyMessage: 'Surviving wisps cannot be moved during reinforcement.',
+          overlappingId: null,
+          diagnostics: failDiag,
+        },
+      };
+    }
+    const wisp = this.state.wisps.find((w) => w.id === wispId);
+    if (!wisp) {
+      return {
+        success: false,
+        validation: {
+          isValid: false,
+          rejectionCode: 'OUTSIDE_SANCTUARY_ZONE',
+          playerFriendlyMessage: 'Wisp not found.',
+          overlappingId: null,
+        },
+      };
+    }
+
+    const validation = this.validateWispPlacement(wispId, pos);
+    this.lastWispPlacementDiagnostics = validation.diagnostics ?? null;
+    if (!validation.isValid) {
+      return { success: false, validation };
+    }
+
+    wisp.position = { x: Math.round(pos.x), y: Math.round(pos.y) };
+    wisp.placed = true;
+    wisp.isValid = true;
+    wisp.validationReason = null;
+
+    this.recomputeAllWispProtection();
+    if (this.wispPlacementPhase === 'PLACE_WISPS' || this.wispPlacementPhase === 'PRE_SIEGE_REVIEW') {
+      this.saveNamedSnapshot('PRE_SIEGE_WISPS');
+      this.saveNamedSnapshot('INITIAL_DESIGN');
+    }
+    this.notify();
+    return { success: true, validation };
+  }
+
+  public unstageWisp(wispId: string): boolean {
+    if (this.isReinforcementMode) return false;
+    const wisp = this.state.wisps.find((w) => w.id === wispId);
+    if (!wisp) return false;
+    wisp.placed = false;
+    wisp.isValid = false;
+    wisp.validationReason = null;
+    this.recomputeAllWispProtection();
+    this.notify();
+    return true;
+  }
+
+  public placeAllWispsInDefaultSanctuarySlots(allowFallbackOffsets = false): number {
+    if (this.isReinforcementMode) return 0;
+    let placedCount = 0;
+    const unplacedWispIds: string[] = [];
+    const unplacedWispNames: string[] = [];
+    const candidateOffsets: Vector2[] = allowFallbackOffsets
+      ? [
+          { x: 0, y: 0 },
+          { x: 0, y: -18 },
+          { x: -20, y: 0 },
+          { x: 20, y: 0 },
+          { x: -24, y: -20 },
+          { x: 24, y: -20 },
+          { x: 0, y: -36 },
+        ]
+      : [{ x: 0, y: 0 }];
+
+    for (const w of this.state.wisps) {
+      const defPos = w.defaultPosition ?? getDefaultWispPosition(w.id);
+      let committed = false;
+      let lastRejection: WispPlacementValidationResult['rejectionCode'] = null;
+      for (const off of candidateOffsets) {
+        const candidate = { x: defPos.x + off.x, y: defPos.y + off.y };
+        const res = this.placeWisp(w.id, candidate);
+        if (res.success) {
+          placedCount++;
+          committed = true;
+          break;
+        } else {
+          lastRejection = res.validation.rejectionCode;
+        }
+      }
+      if (!committed) {
+        w.placed = false;
+        w.isValid = false;
+        w.validationReason = lastRejection;
+        unplacedWispIds.push(w.id);
+        unplacedWispNames.push(w.name ?? w.id);
+      }
+    }
+
+    this.lastDefaultSlotPlacementReport = {
+      placedCount,
+      unplacedWispIds,
+      unplacedWispNames,
+      message:
+        unplacedWispNames.length > 0
+          ? `Default slot blocked for ${unplacedWispNames.join(', ')}. Drag remaining wisp(s) to an open sanctuary spot.`
+          : null,
+    };
+
+    this.recomputeAllWispProtection();
+    this.notify();
+    return placedCount;
+  }
+
+  public areAllWispsPlacedAndValid(customState?: LevelState): boolean {
+    const target = customState ?? this.state;
+    if (target.wisps.length < 5) return false;
+    for (const w of target.wisps) {
+      if (w.placed !== true) return false;
+      const val = validateWispPlacementPosition(
+        w.id,
+        w.position,
+        target.wisps,
+        target.pieces,
+        target.anchors,
+      );
+      if (!val.isValid) return false;
+    }
+    return true;
+  }
+
+  public getSharedCollapseRiskWarning(customState?: LevelState): string | null {
+    const target = customState ?? this.state;
+    const hasShared = target.wisps.some((w) => w.placed === true && w.sharedCollapseRisk);
+    return hasShared ? 'Several wisps share the same collapse risk.' : null;
+  }
+
+  public enterPreSiegeReview(): boolean {
+    this.recomputeAllWispProtection();
+    if (!this.areAllWispsPlacedAndValid()) {
+      return false;
+    }
+    this.wispPlacementPhase = 'PRE_SIEGE_REVIEW';
+    this.savedPhase = 'PRE_SIEGE_REVIEW';
+    this.saveNamedSnapshot('PRE_SIEGE_WISPS');
+    this.saveNamedSnapshot('INITIAL_DESIGN');
+    this.notify();
+    return true;
+  }
+
+  public returnToPlaceWispsFromReview(): void {
+    this.wispPlacementPhase = 'PLACE_WISPS';
+    this.savedPhase = 'PLACE_WISPS';
+    this.recomputeAllWispProtection();
+    this.notify();
+  }
+
+  public returnFromWispPhaseToBuild(): void {
+    // Return all five wisps to unplaced staging state (placed: false) and remove active wisp collision regions from BUILD
+    for (const w of this.state.wisps) {
+      const defPos = w.defaultPosition ?? getDefaultWispPosition(w.id);
+      w.position = { ...defPos };
+      w.defaultPosition = { ...defPos };
+      w.isDispersed = false;
+      w.placed = false;
+      w.isValid = false;
+      w.validationReason = null;
+    }
+    this.wispPlacementPhase = 'STAGED_IN_BUILD';
+    this.wispsRequiredBeforeSiege = true;
+    this.savedPhase = 'CONSTRUCTION';
+    this.lastDefaultSlotPlacementReport = null;
+    this.lastRotationDiagnostics = null;
+    this.recomputeAllWispProtection();
+    this.saveNamedSnapshot('STABLE_BUILD');
+    this.saveNamedSnapshot('INITIAL_DESIGN');
+    this.notify();
+  }
+
+  public lockWispsForSiege(): void {
+    if (!this.areAllWispsPlacedAndValid()) {
+      this.placeAllWispsInDefaultSanctuarySlots(true);
+    }
+    this.recomputeAllWispProtection();
+    this.wispPlacementPhase = 'LOCKED_FOR_SIEGE';
+    this.saveNamedSnapshot('PRE_SIEGE_WISPS');
+    this.saveNamedSnapshot('INITIAL_DESIGN');
+    this.saveSessionMeta();
   }
 
   // --- Named Snapshots & Restoration ---
@@ -1316,13 +2231,42 @@ export class LevelStore {
     return true;
   }
 
+  public restoreForRetryDesign(): boolean {
+    const snap =
+      this.snapshots.PRE_SIEGE_WISPS ??
+      this.snapshots.INITIAL_DESIGN ??
+      this.snapshots.STABLE_BUILD ??
+      this.preTestSnapshot;
+    if (!snap) return false;
+    this.state = deepClone(snap);
+    this.isReinforcementMode = false;
+    this.reinforcementUndoStack = [];
+    this.reinforcementRedoStack = [];
+    this.deliveryGranted = false;
+    this.deliveredInventory = { wood_beam: 0, wood_block: 0, stone_block: 0, bullseye_block: 0 };
+    this.deliveredPieceIds = [];
+    this.reinforcementMaterialsUsed = 0;
+    this.guaranteedDeliveryUsed = 0;
+    this.bullseyeConflictDiagnostic = null;
+    this.lastRotationDiagnostics = null;
+    if (this.preTestRevisionId !== null) {
+      this.currentConstructionRevision = this.preTestRevisionId;
+    }
+    this.recomputeAllWispProtection();
+    this.lastChecklistRecomputationReason = 'RESTORE_FOR_RETRY_DESIGN';
+    this.savedPhase = 'CONSTRUCTION';
+    this.notify();
+    return true;
+  }
+
   public restoreSnapshot(type: SnapshotType): boolean {
     const snap = this.snapshots[type];
     if (!snap) return false;
     this.state = deepClone(snap);
     this.bullseyeConflictDiagnostic = null;
+    this.lastRotationDiagnostics = null;
 
-    if (type === 'INITIAL_DESIGN' || type === 'LEVEL_TEMPLATE') {
+    if (type === 'INITIAL_DESIGN' || type === 'STABLE_BUILD' || type === 'LEVEL_TEMPLATE') {
       this.isReinforcementMode = false;
       this.reinforcementUndoStack = [];
       this.reinforcementRedoStack = [];
@@ -1353,28 +2297,37 @@ export class LevelStore {
       this.lastChecklistRecomputationReason = 'RESTORE_LEVEL_TEMPLATE';
       this.snapshots = {
         LEVEL_TEMPLATE: deepClone(INITIAL_LEVEL_STATE),
+        STABLE_BUILD: null,
         INITIAL_DESIGN: null,
+        PRE_SIEGE_WISPS: null,
         POST_ATTACK_1: null,
         REINFORCEMENT_ENTRY: null,
         REINFORCEMENT_COMPLETE: null,
         FINAL_RESULT: null,
       };
-    } else if (type === 'INITIAL_DESIGN') {
+      this.wispPlacementPhase = 'STAGED_IN_BUILD';
+      this.wispsRequiredBeforeSiege = false;
+    } else if (type === 'INITIAL_DESIGN' || type === 'STABLE_BUILD' || type === 'PRE_SIEGE_WISPS') {
       if (this.preTestRevisionId !== null) {
         this.currentConstructionRevision = this.preTestRevisionId;
       }
-      this.lastChecklistRecomputationReason = 'RESTORE_INITIAL_DESIGN';
+      this.lastChecklistRecomputationReason = `RESTORE_${type}`;
     } else {
       this.currentConstructionRevision++;
       this.lastChecklistRecomputationReason = `RESTORE_SNAPSHOT_${type}`;
     }
 
+    this.recomputeAllWispProtection();
     this.notify();
     return true;
   }
 
   public hasSnapshot(): boolean {
-    return this.preTestSnapshot !== null || this.snapshots.INITIAL_DESIGN !== null;
+    return (
+      this.preTestSnapshot !== null ||
+      this.snapshots.INITIAL_DESIGN !== null ||
+      this.snapshots.STABLE_BUILD !== null
+    );
   }
 
   public resetToDefault(): void {
@@ -1383,7 +2336,9 @@ export class LevelStore {
     this.preTestRevisionId = null;
     this.snapshots = {
       LEVEL_TEMPLATE: deepClone(INITIAL_LEVEL_STATE),
+      STABLE_BUILD: null,
       INITIAL_DESIGN: null,
+      PRE_SIEGE_WISPS: null,
       POST_ATTACK_1: null,
       REINFORCEMENT_ENTRY: null,
       REINFORCEMENT_COMPLETE: null,
@@ -1400,6 +2355,8 @@ export class LevelStore {
     this.reinforcementMaterialsUsed = 0;
     this.guaranteedDeliveryUsed = 0;
     this.bullseyeConflictDiagnostic = null;
+    this.lastRotationDiagnostics = null;
+    this.lastDefaultSlotPlacementReport = null;
     this.currentConstructionRevision = 1;
     this.testedRevisionId = null;
     this.stabilityPassedForRevisionId = null;
@@ -1417,6 +2374,9 @@ export class LevelStore {
     this.previousGuidedStep = 'STEP_1_SELECT_BEAM';
     this.lastResults = null;
     this.savedPhase = 'CONSTRUCTION';
+    this.wispPlacementPhase = 'STAGED_IN_BUILD';
+    this.wispsRequiredBeforeSiege = false;
+    this.recomputeAllWispProtection();
     this.notify();
   }
 
@@ -1585,15 +2545,16 @@ export class LevelStore {
       }
       this.validatePersistedTutorialAgainstDesign();
       if (
-        this.stabilityPassedForRevisionId === this.currentConstructionRevision &&
-        this.acceptedRevisionId !== this.currentConstructionRevision
+        this.stabilityPassedForRevisionId === this.currentConstructionRevision
       ) {
-        this.savedPhase = 'SETTLED';
-        this.lastChecklistRecomputationReason = 'RELOAD_ON_FORTRESS_STABLE';
+        this.acceptedRevisionId = this.currentConstructionRevision;
+        this.stabilityTestRestoredOrAccepted = true;
+        this.savedPhase = 'CONSTRUCTION_READY';
+        this.lastChecklistRecomputationReason = 'RELOAD_ON_FORTRESS_STABLE_AUTO_ACCEPT';
         this.notify();
         return {
-          recoveredPhase: 'SETTLED',
-          message: 'Reloaded on Fortress Stable screen: Preserved passed stability state.',
+          recoveredPhase: 'CONSTRUCTION_READY',
+          message: 'Reloaded on Fortress Stable screen: Preserved passed stability and enabled Begin Siege.',
         };
       }
       this.savedPhase = 'INITIAL_CONSTRUCTION';
@@ -1605,8 +2566,43 @@ export class LevelStore {
       };
     }
 
+    // 7. Reload during PLACE_WISPS or PRE_SIEGE_REVIEW -> restore committed wisp positions, deduplicate wisps, preserve construction & inventory
+    if (
+      phase === 'PLACE_WISPS' ||
+      phase === 'PRE_SIEGE_REVIEW' ||
+      this.wispPlacementPhase === 'PLACE_WISPS' ||
+      this.wispPlacementPhase === 'PRE_SIEGE_REVIEW'
+    ) {
+      // Deduplicate wisps to guarantee exactly the 5 unique sanctuary wisps
+      const seenWispIds = new Set<string>();
+      const dedupedWisps = [];
+      for (const w of this.state.wisps) {
+        if (!seenWispIds.has(w.id)) {
+          seenWispIds.add(w.id);
+          dedupedWisps.push(w);
+        }
+      }
+      this.state.wisps = dedupedWisps;
+      this.recomputeAllWispProtection();
+
+      const targetPhase: GameMode =
+        (phase === 'PRE_SIEGE_REVIEW' || this.wispPlacementPhase === 'PRE_SIEGE_REVIEW') &&
+        this.areAllWispsPlacedAndValid()
+          ? 'PRE_SIEGE_REVIEW'
+          : 'PLACE_WISPS';
+      this.wispPlacementPhase = targetPhase === 'PRE_SIEGE_REVIEW' ? 'PRE_SIEGE_REVIEW' : 'PLACE_WISPS';
+      this.savedPhase = targetPhase;
+      this.lastChecklistRecomputationReason = `RELOAD_${targetPhase}`;
+      this.notify();
+      return {
+        recoveredPhase: targetPhase,
+        message: `Reloaded during ${targetPhase}: Restored committed wisp positions and accepted fortress structure.`,
+      };
+    }
+
     // Default: Initial construction
     this.validatePersistedTutorialAgainstDesign();
+    this.recomputeAllWispProtection();
     this.savedPhase = 'INITIAL_CONSTRUCTION';
     this.lastChecklistRecomputationReason = 'RELOAD_CONSTRUCTION';
     this.notify();
@@ -1654,6 +2650,8 @@ export class LevelStore {
         beginSiegeHighlightOnce: this.beginSiegeHighlightOnce,
         unstableHint: this.unstableHint,
         currentGuidedStep: this.previousGuidedStep,
+        wispPlacementPhase: this.wispPlacementPhase,
+        wispsRequiredBeforeSiege: this.wispsRequiredBeforeSiege,
       };
       localStorage.setItem(META_STORAGE_KEY, JSON.stringify(meta));
     } catch {
@@ -1668,6 +2666,10 @@ export class LevelStore {
       if (!raw) return;
       const parsed = JSON.parse(raw) as Partial<SavedSessionMeta>;
       if (parsed.savedPhase) this.savedPhase = parsed.savedPhase;
+      if (parsed.wispPlacementPhase) this.wispPlacementPhase = parsed.wispPlacementPhase;
+      if (typeof parsed.wispsRequiredBeforeSiege === 'boolean') {
+        this.wispsRequiredBeforeSiege = parsed.wispsRequiredBeforeSiege;
+      }
       if (typeof parsed.isReinforcementMode === 'boolean') {
         this.isReinforcementMode = parsed.isReinforcementMode;
       }
@@ -1733,7 +2735,9 @@ export class LevelStore {
       if (parsed.snapshots) {
         this.snapshots = {
           LEVEL_TEMPLATE: parsed.snapshots.LEVEL_TEMPLATE ?? deepClone(INITIAL_LEVEL_STATE),
+          STABLE_BUILD: parsed.snapshots.STABLE_BUILD ?? null,
           INITIAL_DESIGN: parsed.snapshots.INITIAL_DESIGN ?? null,
+          PRE_SIEGE_WISPS: parsed.snapshots.PRE_SIEGE_WISPS ?? null,
           POST_ATTACK_1: parsed.snapshots.POST_ATTACK_1 ?? null,
           REINFORCEMENT_ENTRY: parsed.snapshots.REINFORCEMENT_ENTRY ?? null,
           REINFORCEMENT_COMPLETE: parsed.snapshots.REINFORCEMENT_COMPLETE ?? null,
@@ -1804,6 +2808,9 @@ export class LevelStore {
     if (candidate.schemaVersion !== INITIAL_LEVEL_STATE.schemaVersion) return false;
     if (candidate.levelId !== INITIAL_LEVEL_STATE.levelId) return false;
     if (!Array.isArray(candidate.pieces)) return false;
+    if (!Array.isArray(candidate.joints)) {
+      candidate.joints = [];
+    }
     if (!candidate.inventory || typeof candidate.inventory !== 'object') return false;
 
     const validMaterials: MaterialType[] = ['wood_beam', 'wood_block', 'stone_block', 'bullseye_block'];

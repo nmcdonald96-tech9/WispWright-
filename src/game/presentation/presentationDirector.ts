@@ -582,6 +582,7 @@ export class PresentationDirector {
       effectiveMode === 'CONSTRUCTION' ||
       effectiveMode === 'INITIAL_CONSTRUCTION' ||
       effectiveMode === 'CONSTRUCTION_READY' ||
+      effectiveMode === 'PLACE_WISPS' ||
       effectiveMode === 'LEVEL_LOADING' ||
       effectiveMode === 'LEVEL_INTRO' ||
       effectiveMode === 'WISP_INTRO' ||
@@ -597,7 +598,7 @@ export class PresentationDirector {
       return;
     }
 
-    if (effectiveMode === 'THREAT_PREVIEW') {
+    if (effectiveMode === 'THREAT_PREVIEW' || effectiveMode === 'PRE_SIEGE_REVIEW') {
       this.presentationTimeScale = 1.0;
       this.povPose.isActive = false;
       this.setCameraMode('THREAT_PREVIEW_CAMERA', 'battlefield_corridor');

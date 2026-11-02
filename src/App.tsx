@@ -7,7 +7,15 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { LevelStore } from './game/state/levelStore';
 import { CanvasRenderer } from './game/render/canvasRenderer';
 import { GestureController, isEditableMode } from './game/input/gestureController';
-import { GameMode, MaterialType, PlacedPiece, StabilityReport } from './game/types';
+import { MATERIAL_CONFIGS } from './game/config';
+import {
+  ConstructionDiagnostics,
+  DragState,
+  GameMode,
+  MaterialType,
+  PlacedPiece,
+  StabilityReport,
+} from './game/types';
 import { DistancePreset } from './game/siege/siegeConfig';
 import {
   DEFAULT_PRESENTATION_SETTINGS,
@@ -22,6 +30,7 @@ import { ThreatLineupBar } from './components/ThreatLineupBar';
 import { InventoryTray } from './components/InventoryTray';
 import { ActionControls } from './components/ActionControls';
 import { PieceToolbar } from './components/PieceToolbar';
+import { PlacementModeBar } from './components/PlacementModeBar';
 import { StabilityGauge } from './components/StabilityGauge';
 import { DiagnosticPanel } from './components/DiagnosticPanel';
 import { ZoomControls } from './components/ZoomControls';
@@ -29,6 +38,8 @@ import { HelpModal } from './components/HelpModal';
 import { SiegeHUD } from './components/SiegeHUD';
 import { SiegeCompleteModal } from './components/SiegeCompleteModal';
 import { PresentationSettingsModal } from './components/PresentationSettingsModal';
+import { WispPlacementTray } from './components/WispPlacementTray';
+import { PreSiegeReviewPanel } from './components/PreSiegeReviewPanel';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -61,6 +72,10 @@ export default function App() {
   const [presDiag, setPresDiag] = useState<PresentationDiagnostics | null>(null);
   const [activeCaption, setActiveCaption] = useState<string | null>(null);
   const [isReplaying, setIsReplaying] = useState(false);
+  const [constructionDiag, setConstructionDiag] = useState<ConstructionDiagnostics | null>(null);
+  const [tapPlacementActive, setTapPlacementActive] = useState(false);
+  const [activeDragState, setActiveDragState] = useState<DragState | null>(null);
+  const [selectedWispId, setSelectedWispId] = useState<string | null>(null);
 
   // Modal / panel toggles
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -85,9 +100,16 @@ export default function App() {
     setUndoCount(store.getUndoCount());
     setRedoCount(store.getRedoCount());
 
+    if (gestureRef.current) {
+      setConstructionDiag(gestureRef.current.getConstructionDiagnostics());
+      setTapPlacementActive(Boolean(gestureRef.current.tapPlacementMode?.active));
+    }
+
     if (rendererRef.current) {
       const selected = rendererRef.current.getSelectedPiece();
       setSelectedPiece(selected ? { ...selected } : null);
+      setActiveDragState(rendererRef.current.dragState ? { ...rendererRef.current.dragState } : null);
+      setSelectedWispId(rendererRef.current.selectedWispId);
       setZoom(rendererRef.current.camera.userZoom);
       const sc = rendererRef.current.siegeController;
       setReinforcementTimerSec(sc.reinforcementTimerSec);
@@ -166,6 +188,20 @@ export default function App() {
       resizeObserver.observe(containerRef.current);
     }
 
+    // Fast pointer sync for inventory UI-lift ghost bridge and PieceToolbar auto-hide
+    const syncDragStateOnPointer = () => {
+      if (rendererRef.current) {
+        const ds = rendererRef.current.dragState;
+        setActiveDragState(ds ? { ...ds } : null);
+      }
+      if (gestureRef.current && isDevOpen) {
+        setConstructionDiag(gestureRef.current.getConstructionDiagnostics());
+      }
+    };
+    window.addEventListener('pointermove', syncDragStateOnPointer, { passive: true });
+    window.addEventListener('pointerup', syncDragStateOnPointer, { passive: true });
+    window.addEventListener('pointercancel', syncDragStateOnPointer, { passive: true });
+
     // Interval to sync selection, camera zoom, captions, and diagnostics to React UI
     const intervalId = window.setInterval(() => {
       if (rendererRef.current) {
@@ -183,6 +219,8 @@ export default function App() {
           }
           return piece ? { ...piece } : null;
         });
+        const ds = rendererRef.current.dragState;
+        setActiveDragState(ds ? { ...ds } : null);
         setZoom(rendererRef.current.camera.userZoom);
         setStatusFeedback(gestureRef.current?.statusFeedback || null);
         const sc = rendererRef.current.siegeController;
@@ -194,6 +232,10 @@ export default function App() {
         if (isDevOpen) {
           setPresDiag(rendererRef.current.getPresentationDiagnostics());
         }
+        if (gestureRef.current) {
+          setConstructionDiag(gestureRef.current.getConstructionDiagnostics());
+          setTapPlacementActive(Boolean(gestureRef.current.tapPlacementMode?.active));
+        }
       }
     }, 100);
 
@@ -201,6 +243,9 @@ export default function App() {
 
     return () => {
       window.clearInterval(intervalId);
+      window.removeEventListener('pointermove', syncDragStateOnPointer);
+      window.removeEventListener('pointerup', syncDragStateOnPointer);
+      window.removeEventListener('pointercancel', syncDragStateOnPointer);
       resizeObserver.disconnect();
       unsubscribe();
       gesture.unbind();
@@ -290,8 +335,8 @@ export default function App() {
   const handleAcceptStableDesign = () => {
     if (!rendererRef.current) return;
     gestureRef.current?.completeOrCancelActiveDragSafely();
-    rendererRef.current.acceptStableDesign();
-    setMode('CONSTRUCTION');
+    rendererRef.current.acceptStableDesign(true);
+    setMode(rendererRef.current.getEffectiveMode());
     setSelectedPiece(null);
     setStabilityReport((prev) => ({ ...prev, isSimulating: false }));
     soundSynth.playSnap();
@@ -305,6 +350,40 @@ export default function App() {
     setMode('CONSTRUCTION');
     setSelectedPiece(null);
     setStabilityReport((prev) => ({ ...prev, isSimulating: false }));
+    syncStateFromStore();
+  };
+
+  const handleReturnFromWispPhaseToBuild = () => {
+    if (!rendererRef.current) return;
+    gestureRef.current?.completeOrCancelActiveDragSafely();
+    rendererRef.current.returnFromWispPhaseToBuild();
+    setMode('CONSTRUCTION');
+    setSelectedPiece(null);
+    syncStateFromStore();
+  };
+
+  const handleEnterPreSiegeReview = () => {
+    if (!rendererRef.current) return;
+    gestureRef.current?.completeOrCancelActiveDragSafely();
+    const ok = rendererRef.current.enterPreSiegeReview();
+    if (ok) {
+      setMode('PRE_SIEGE_REVIEW');
+      setSelectedPiece(null);
+    }
+    syncStateFromStore();
+  };
+
+  const handleReturnToPlaceWispsFromReview = () => {
+    if (!rendererRef.current) return;
+    gestureRef.current?.completeOrCancelActiveDragSafely();
+    rendererRef.current.returnToPlaceWispsFromReview();
+    setMode('PLACE_WISPS');
+    syncStateFromStore();
+  };
+
+  const handlePlaceAllDefaultWisps = () => {
+    storeRef.current.placeAllWispsInDefaultSanctuarySlots();
+    soundSynth.playSnap();
     syncStateFromStore();
   };
 
@@ -396,8 +475,23 @@ export default function App() {
 
   const handleRotateSelected = (deltaAngle: number) => {
     if (!selectedPiece) return;
-    storeRef.current.rotatePiece(selectedPiece.id, deltaAngle);
-    soundSynth.playRotate();
+    if (gestureRef.current) {
+      gestureRef.current.rotateSelectedPiece(deltaAngle);
+    } else {
+      storeRef.current.rotatePiece(selectedPiece.id, deltaAngle);
+      soundSynth.playRotate();
+    }
+    syncStateFromStore();
+  };
+
+  const handleDetachSelectedConnection = () => {
+    if (!selectedPiece) return;
+    if (gestureRef.current) {
+      gestureRef.current.detachSelectedPieceConnection();
+    } else {
+      storeRef.current.detachPieceConnection(selectedPiece.id);
+    }
+    syncStateFromStore();
   };
 
   const handleRemoveSelected = () => {
@@ -486,6 +580,33 @@ export default function App() {
       ? sc?.buildLiveConstructionTelemetry(levelState)
       : sc?.constructionTelemetry;
 
+  const isToolbarPositionedTop = Boolean(
+    selectedPiece &&
+      rendererRef.current &&
+      canvasRef.current &&
+      (() => {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const selScreen = rendererRef.current.camera.worldToScreen(selectedPiece.position, rect);
+        if (selScreen.y > window.innerHeight * 0.48) return true;
+        const suggested = authoritativeTutorial.currentSuggestedPlacementRegion;
+        if (suggested) {
+          const sugScreen = rendererRef.current.camera.worldToScreen(suggested.center, rect);
+          if (sugScreen.y > window.innerHeight * 0.48) return true;
+        }
+        return false;
+      })(),
+  );
+
+  const showUiLiftBridge = Boolean(
+    activeDragState &&
+      activeDragState.source === 'inventory' &&
+      activeDragState.pointerUiCoords &&
+      (activeDragState.inventoryLiftState === 'UI_LIFT' ||
+        activeDragState.inventoryLiftState === 'RETURNING_TO_INVENTORY' ||
+        activeDragState.inventoryLiftState === 'TRANSITIONING_TO_WORLD' ||
+        (activeDragState.transitionProgress ?? 1) < 0.92),
+  );
+
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#090d16] select-none touch-none">
       {/* 1. Fullscreen Game Canvas Host */}
@@ -568,18 +689,51 @@ export default function App() {
         presentationMode={presSettings.presentationMode}
       />
 
-      {/* 6. Contextual Piece Toolbar (When piece selected during Construction or Reinforcement) */}
+      {/* 6. Contextual Piece Toolbar (Auto-collapses during active drag & repositions away from snap targets) */}
       {isEditable && (
         <PieceToolbar
           selectedPiece={selectedPiece}
+          activeJointCount={
+            selectedPiece
+              ? storeRef.current
+                  .getJointsForPiece(selectedPiece.id)
+                  .filter((j) => j.state !== 'BROKEN').length
+              : 0
+          }
+          isDragging={Boolean(activeDragState)}
           isReinforcement={isReinforcement}
+          isPositionedTop={isToolbarPositionedTop}
           onRotate={handleRotateSelected}
+          onDetachConnection={handleDetachSelectedConnection}
           onRemove={handleRemoveSelected}
           onDeselect={handleDeselect}
         />
       )}
 
-      {/* 6B. Single Bottom Subtitle Region (Personality & Comedic Character Quips) */}
+      {/* 6B. Tap Accessibility Placement Mode Bar */}
+      {isEditable && tapPlacementActive && (
+        <PlacementModeBar
+          dragState={rendererRef.current?.dragState ?? null}
+          onRotate={(delta) => {
+            gestureRef.current?.rotateActiveGhost(delta);
+            syncStateFromStore();
+          }}
+          onAcceptSnapAngle={() => {
+            gestureRef.current?.acceptProposedSnapRotation();
+            syncStateFromStore();
+          }}
+          onConfirm={() => {
+            gestureRef.current?.confirmTapPlacement();
+            syncStateFromStore();
+          }}
+          onCancel={() => {
+            gestureRef.current?.cancelTapPlacement();
+            syncStateFromStore();
+          }}
+        />
+      )}
+
+      {/* 6C. Single Bottom Subtitle Region (Personality & Comedic Character Quips) */}
       {presSettings.enableSubtitles && activeCaption && (
         <div
           className={`fixed ${
@@ -636,10 +790,127 @@ export default function App() {
             highlightFocus={highlightInventoryFocus}
             highlightedMaterial={highlightedMaterial}
             guidanceActive={guidanceActive}
+            activeLiftItemType={
+              activeDragState?.source === 'inventory' ? activeDragState.pieceType : null
+            }
+            onPointerDownItem={(type, e, cardBounds, trayTopY) => {
+              gestureRef.current?.handleInventoryPointerDown(type, e, cardBounds, trayTopY);
+              syncStateFromStore();
+            }}
             onStartDrag={handleStartDrag}
           />
         )}
       </div>
+
+      {/* 7A-1. Post-Stability Wisp Placement Staging Tray (PLACE_WISPS) */}
+      {mode === 'PLACE_WISPS' && (
+        <WispPlacementTray
+          wisps={levelState.wisps}
+          selectedWispId={selectedWispId}
+          sharedCollapseWarning={storeRef.current.getSharedCollapseRiskWarning(levelState)}
+          defaultSlotReportMessage={storeRef.current.lastDefaultSlotPlacementReport?.message ?? null}
+          onSelectWisp={(wispId) => {
+            gestureRef.current?.selectWispForPlacement(wispId);
+            syncStateFromStore();
+          }}
+          onWispPointerDown={(wispId, e) => {
+            gestureRef.current?.handleWispTrayPointerDown(wispId, e);
+            syncStateFromStore();
+          }}
+          onPlaceAllDefaults={handlePlaceAllDefaultWisps}
+          onReturnToBuild={handleReturnFromWispPhaseToBuild}
+          onEnterPreSiegeReview={handleEnterPreSiegeReview}
+          allWispsPlacedAndValid={storeRef.current.areAllWispsPlacedAndValid(levelState)}
+        />
+      )}
+
+      {/* 7A-2. Pre-Siege Review Panel (PRE_SIEGE_REVIEW) */}
+      {mode === 'PRE_SIEGE_REVIEW' && (
+        <PreSiegeReviewPanel
+          wisps={levelState.wisps}
+          inventory={levelState.inventory}
+          bullseyeState={storeRef.current.getBullseyeLogicalState(
+            Boolean(sc?.targetingDiagnostics?.bullseyeReachableByCurrentAttacker ?? true),
+            sc?.targetingDiagnostics?.validBullseyeTrajectoryCount ?? 0,
+          )}
+          sharedCollapseWarning={storeRef.current.getSharedCollapseRiskWarning(levelState)}
+          onReturnToPlaceWisps={handleReturnToPlaceWispsFromReview}
+          onReturnToBuild={handleReturnFromWispPhaseToBuild}
+          onBeginSiege={handleTestSiege}
+        />
+      )}
+
+      {/* 7B. UI-to-World Inventory Lift Ghost Bridge (Visibly lifts from touched card across tray boundary) */}
+      {showUiLiftBridge && activeDragState && activeDragState.pointerUiCoords && (
+        <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
+          {(() => {
+            const pUi = activeDragState.pointerUiCoords;
+            const card = activeDragState.sourceCardBounds;
+            const prog = activeDragState.transitionProgress ?? 0;
+            const presScale = activeDragState.ghostPresentationScale ?? 0.55;
+            const liftY = 8 + 40 * prog;
+            const ghostScreenX = pUi.x;
+            const ghostScreenY = pUi.y - liftY;
+            const cfg = MATERIAL_CONFIGS[activeDragState.pieceType];
+            const rotDeg = (activeDragState.rotation * 180) / Math.PI;
+            const isReturning = activeDragState.inventoryLiftState === 'RETURNING_TO_INVENTORY';
+            // Cross-fade into canvas ghost as transitionProgress approaches 1.0
+            const bridgeOpacity = prog > 0.78 ? Math.max(0.15, 1 - (prog - 0.78) * 3.8) : 0.96;
+
+            return (
+              <>
+                {card && (
+                  <svg className="absolute inset-0 w-full h-full">
+                    <line
+                      x1={card.x + card.width / 2}
+                      y1={card.y + card.height / 2}
+                      x2={ghostScreenX}
+                      y2={ghostScreenY}
+                      stroke={isReturning ? 'rgba(251, 191, 36, 0.65)' : 'rgba(45, 212, 191, 0.7)'}
+                      strokeWidth="2"
+                      strokeDasharray="4 4"
+                    />
+                    <circle
+                      cx={card.x + card.width / 2}
+                      cy={card.y + card.height / 2}
+                      r="4"
+                      fill={isReturning ? '#fbbf24' : '#2dd4bf'}
+                    />
+                  </svg>
+                )}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${ghostScreenX}px`,
+                    top: `${ghostScreenY}px`,
+                    width: `${cfg.width * zoom}px`,
+                    height: `${cfg.height * zoom}px`,
+                    transform: `translate(-50%, -50%) scale(${presScale}) rotate(${rotDeg}deg)`,
+                    opacity: bridgeOpacity,
+                    background:
+                      activeDragState.pieceType === 'wood_beam'
+                        ? 'linear-gradient(to bottom, #c28148, #7e461b)'
+                        : activeDragState.pieceType === 'wood_block'
+                          ? 'linear-gradient(135deg, #b4743c, #854d22)'
+                          : activeDragState.pieceType === 'stone_block'
+                            ? 'linear-gradient(135deg, #64748b, #334155)'
+                            : 'linear-gradient(135deg, #4c1d3d, #231020)',
+                    borderColor:
+                      activeDragState.pieceType === 'bullseye_block' ? '#f43f5e' : '#38bdf8',
+                  }}
+                  className="rounded-xs border-2 shadow-2xl shadow-cyan-500/40 flex items-center justify-center"
+                >
+                  {activeDragState.pieceType === 'bullseye_block' && (
+                    <div className="w-5 h-5 rounded-full bg-rose-600 border border-amber-200 flex items-center justify-center">
+                      <div className="w-2 h-2 rounded-full bg-amber-200" />
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       {/* 8. Active Siege HUD & Post-Attack-1 Assessment Card */}
       {sc && (
@@ -721,6 +992,7 @@ export default function App() {
         targetingDiagnostics={sc?.targetingDiagnostics || null}
         presentationDiagnostics={presDiag}
         constructionTelemetry={liveConstructionTelemetry}
+        constructionDiagnostics={constructionDiag}
         devBypassTutorialRequirements={Boolean(sc?.devBypassTutorialRequirements)}
         onToggleDevBypassTutorialRequirements={() => {
           if (sc) {

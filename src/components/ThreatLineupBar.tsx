@@ -62,19 +62,19 @@ function getGuidedStepInstruction(
     case 'STEP_1_SELECT_BEAM':
       return {
         title: 'Shelter Lesson 1/4',
-        copy: 'Start with a beam. Drag the glowing beam onto the sanctuary.',
+        copy: 'Press and drag the glowing beam onto the sanctuary, or tap to place.',
         lessonIndex: 1,
       };
     case 'STEP_2_PLACE_BEAM':
       return {
         title: 'Shelter Lesson 1/4',
-        copy: 'Place the beam across these supports. It will help form a roof.',
+        copy: 'Place the beam across these supports. It will help form a protective roof.',
         lessonIndex: 1,
       };
     case 'STEP_3_PLACE_BLOCK':
       return {
         title: 'Shelter Lesson 2/4',
-        copy: 'Add a block beneath the beam to support its weight.',
+        copy: 'Press and drag a wood block beneath the beam to support its weight, or tap to place.',
         lessonIndex: 2,
       };
     case 'STEP_4_CREATE_SUPPORT':
@@ -257,12 +257,31 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
 
           {/* Wisps & Attacks Left Counter */}
           <div className="flex items-center gap-2 shrink-0 pl-1 border-l border-slate-800">
-            <div className="flex items-center gap-1" title="Protected Elemental Wisps">
-              <Heart className="w-3 h-3 text-emerald-400 fill-emerald-400" />
-              <span className="font-bold text-emerald-300">
-                {stableWisps}/{state.wisps.length}
-              </span>
-            </div>
+            {isInitialConstruction ? (
+              <div
+                className="flex items-center gap-1"
+                title="Wisps will be placed after the shelter passes stability testing."
+              >
+                <Sparkles className="w-3 h-3 text-teal-400 shrink-0" />
+                <span className="font-bold text-teal-300 whitespace-nowrap">
+                  Wisps awaiting placement: {state.wisps.length}
+                </span>
+              </div>
+            ) : mode === 'PLACE_WISPS' || mode === 'PRE_SIEGE_REVIEW' ? (
+              <div className="flex items-center gap-1" title="Placed Elemental Wisps">
+                <Sparkles className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span className="font-bold text-emerald-300 whitespace-nowrap">
+                  Placed Wisps: {state.wisps.filter((w) => w.placed === true).length}/{state.wisps.length}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1" title="Surviving Elemental Wisps">
+                <Heart className="w-3 h-3 text-emerald-400 fill-emerald-400" />
+                <span className="font-bold text-emerald-300 whitespace-nowrap">
+                  Surviving Wisps: {stableWisps}/{state.wisps.length}
+                </span>
+              </div>
+            )}
             <button
               onClick={onTriggerTutorialIntro}
               className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-semibold cursor-pointer"

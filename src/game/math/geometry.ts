@@ -4,7 +4,14 @@
  */
 
 import { MATERIAL_CONFIGS } from '../config';
-import { EnvironmentalAnchor, MaterialType, PlacedPiece, SnapSocket, Vector2 } from '../types';
+import {
+  EnvironmentalAnchor,
+  MaterialType,
+  PlacedPiece,
+  SocketKind,
+  SnapSocket,
+  Vector2,
+} from '../types';
 
 export const Vec2 = {
   create: (x = 0, y = 0): Vector2 => ({ x, y }),
@@ -89,7 +96,6 @@ export function getOBBFromPiece(piece: PlacedPiece): OBB {
  * Check if a 2D point is inside an Oriented Bounding Box
  */
 export function isPointInOBB(point: Vector2, obb: OBB): boolean {
-  // Transform point to OBB local coordinate system
   const d = Vec2.sub(point, obb.center);
   const localX = Vec2.dot(d, obb.axes[0]);
   const localY = Vec2.dot(d, obb.axes[1]);
@@ -98,10 +104,56 @@ export function isPointInOBB(point: Vector2, obb: OBB): boolean {
 }
 
 /**
- * Separating Axis Theorem (SAT) overlap check between two OBBs
+ * Computes the shortest Euclidean distance from a 2D point to the surface/interior of an OBB.
+ * Returns 0 if the point is inside or on the boundary of the OBB.
  */
-export function checkOBBOverlap(a: OBB, b: OBB, slop = 1.0): boolean {
+export function getDistancePointToOBB(point: Vector2, obb: OBB): number {
+  const d = Vec2.sub(point, obb.center);
+  const localX = Vec2.dot(d, obb.axes[0]);
+  const localY = Vec2.dot(d, obb.axes[1]);
+
+  const dx = Math.max(0, Math.abs(localX) - obb.halfWidth);
+  const dy = Math.max(0, Math.abs(localY) - obb.halfHeight);
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Checks whether a circle (center, radius) overlaps an OBB, returning penetration depth.
+ */
+export function checkCircleOBBOverlap(
+  center: Vector2,
+  radius: number,
+  obb: OBB,
+): { overlaps: boolean; penetrationDepth: number } {
+  const d = Vec2.sub(center, obb.center);
+  const localX = Vec2.dot(d, obb.axes[0]);
+  const localY = Vec2.dot(d, obb.axes[1]);
+
+  const absX = Math.abs(localX);
+  const absY = Math.abs(localY);
+
+  if (absX <= obb.halfWidth && absY <= obb.halfHeight) {
+    const insideDepth = Math.min(obb.halfWidth - absX, obb.halfHeight - absY) + radius;
+    return { overlaps: true, penetrationDepth: insideDepth };
+  }
+
+  const dx = Math.max(0, absX - obb.halfWidth);
+  const dy = Math.max(0, absY - obb.halfHeight);
+  const dist = Math.hypot(dx, dy);
+
+  if (dist < radius) {
+    return { overlaps: true, penetrationDepth: radius - dist };
+  }
+  return { overlaps: false, penetrationDepth: 0 };
+}
+
+/**
+ * Returns the minimum penetration depth along separating axes if two OBBs overlap (> slop),
+ * or 0 if they do not overlap.
+ */
+export function getOBBPenetrationDepth(a: OBB, b: OBB, slop = 1.0): number {
   const axes = [a.axes[0], a.axes[1], b.axes[0], b.axes[1]];
+  let minOverlap = Infinity;
 
   for (const axis of axes) {
     let minA = Infinity;
@@ -120,103 +172,231 @@ export function checkOBBOverlap(a: OBB, b: OBB, slop = 1.0): boolean {
       if (proj > maxB) maxB = proj;
     }
 
-    // Shrink projection interval slightly by slop so resting contacts don't register as invalid overlaps
-    if (maxA - slop <= minB || maxB - slop <= minA) {
-      return false; // Separating axis found, no overlap
+    const overlap = Math.min(maxA, maxB) - Math.max(minA, minB);
+    if (overlap <= slop) {
+      return 0; // Separated
+    }
+    if (overlap < minOverlap) {
+      minOverlap = overlap;
     }
   }
 
-  return true; // Overlap on all axes
+  return Math.max(0, minOverlap);
 }
 
 /**
- * Computes all available snap sockets for a piece in world space.
+ * Separating Axis Theorem (SAT) overlap check between two OBBs
  */
-export function getPieceSnapSockets(piece: PlacedPiece): SnapSocket[] {
-  const config = MATERIAL_CONFIGS[piece.type];
+export function checkOBBOverlap(a: OBB, b: OBB, slop = 1.0): boolean {
+  return getOBBPenetrationDepth(a, b, slop) > 0;
+}
+
+interface LocalSocketDef {
+  localName: string;
+  localPos: Vector2;
+  localNormal: Vector2;
+  type: 'center' | 'edge';
+  socketKind: SocketKind;
+  localAngleOffset: number;
+}
+
+/**
+ * Returns the canonical local-space snap socket definitions for a material type.
+ * Defined strictly in local coordinates relative to piece center (0, 0).
+ */
+export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] {
+  const config = MATERIAL_CONFIGS[type];
   const hw = config.width / 2;
   const hh = config.height / 2;
-  const rot = piece.rotation;
-  const sockets: SnapSocket[] = [];
 
-  // Center socket
-  sockets.push({
-    id: `${piece.id}_center`,
-    pieceId: piece.id,
-    worldPos: piece.position,
-    normal: Vec2.rotate({ x: 0, y: -1 }, rot),
-    type: 'center',
-    angle: rot,
-  });
-
-  if (piece.type === 'wood_beam') {
-    // Wood beam: long horizontal piece with 3 sockets along top, 3 along bottom, 1 on each end cap
-    const offsets = [-hw + 24, 0, hw - 24];
-    // Top face
-    offsets.forEach((ox, i) => {
-      const local = { x: ox, y: -hh };
-      sockets.push({
-        id: `${piece.id}_top_${i}`,
-        pieceId: piece.id,
-        worldPos: Vec2.add(piece.position, Vec2.rotate(local, rot)),
-        normal: Vec2.rotate({ x: 0, y: -1 }, rot),
+  if (type === 'wood_beam') {
+    return [
+      // 1. Primary Endpoints (END_A_CENTER and END_B_CENTER)
+      {
+        localName: 'END_A_CENTER',
+        localPos: { x: -hw, y: 0 },
+        localNormal: { x: -1, y: 0 },
         type: 'edge',
-        angle: rot,
-      });
-    });
-
-    // Bottom face
-    offsets.forEach((ox, i) => {
-      const local = { x: ox, y: hh };
-      sockets.push({
-        id: `${piece.id}_bot_${i}`,
-        pieceId: piece.id,
-        worldPos: Vec2.add(piece.position, Vec2.rotate(local, rot)),
-        normal: Vec2.rotate({ x: 0, y: 1 }, rot),
+        socketKind: 'beam_end',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_B_CENTER',
+        localPos: { x: hw, y: 0 },
+        localNormal: { x: 1, y: 0 },
         type: 'edge',
-        angle: rot,
-      });
-    });
-
-    // Left and right caps
-    sockets.push({
-      id: `${piece.id}_cap_l`,
-      pieceId: piece.id,
-      worldPos: Vec2.add(piece.position, Vec2.rotate({ x: -hw, y: 0 }, rot)),
-      normal: Vec2.rotate({ x: -1, y: 0 }, rot),
-      type: 'edge',
-      angle: rot + Math.PI / 2,
-    });
-    sockets.push({
-      id: `${piece.id}_cap_r`,
-      pieceId: piece.id,
-      worldPos: Vec2.add(piece.position, Vec2.rotate({ x: hw, y: 0 }, rot)),
-      normal: Vec2.rotate({ x: 1, y: 0 }, rot),
-      type: 'edge',
-      angle: rot - Math.PI / 2,
-    });
-  } else {
-    // Blocks (48x48): 4 face centers
-    const faceOffsets = [
-      { local: { x: 0, y: -hh }, norm: { x: 0, y: -1 }, name: 'top' },
-      { local: { x: hw, y: 0 }, norm: { x: 1, y: 0 }, name: 'right' },
-      { local: { x: 0, y: hh }, norm: { x: 0, y: 1 }, name: 'bottom' },
-      { local: { x: -hw, y: 0 }, norm: { x: -1, y: 0 }, name: 'left' },
+        socketKind: 'beam_end',
+        localAngleOffset: 0,
+      },
+      // 2. Primary Side Centers (SIDE_TOP_CENTER and SIDE_BOTTOM_CENTER)
+      {
+        localName: 'SIDE_TOP_CENTER',
+        localPos: { x: 0, y: -hh },
+        localNormal: { x: 0, y: -1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_BOTTOM_CENTER',
+        localPos: { x: 0, y: hh },
+        localNormal: { x: 0, y: 1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      // 3. Span Side Sockets (for resting across columns or supporting posts at +/-36px)
+      {
+        localName: 'SIDE_TOP_A',
+        localPos: { x: -hw + 24, y: -hh },
+        localNormal: { x: 0, y: -1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_TOP_B',
+        localPos: { x: hw - 24, y: -hh },
+        localNormal: { x: 0, y: -1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_BOTTOM_A',
+        localPos: { x: -hw + 24, y: hh },
+        localNormal: { x: 0, y: 1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_BOTTOM_B',
+        localPos: { x: hw - 24, y: hh },
+        localNormal: { x: 0, y: 1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      // 4. Endpoint Corner Sockets (END_A/B TOP/BOTTOM CORNERS)
+      {
+        localName: 'END_A_TOP_CORNER',
+        localPos: { x: -hw, y: -hh },
+        localNormal: { x: -1, y: 0 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_A_BOTTOM_CORNER',
+        localPos: { x: -hw, y: hh },
+        localNormal: { x: -1, y: 0 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_B_TOP_CORNER',
+        localPos: { x: hw, y: -hh },
+        localNormal: { x: 1, y: 0 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_B_BOTTOM_CORNER',
+        localPos: { x: hw, y: hh },
+        localNormal: { x: 1, y: 0 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      // 5. Center Socket
+      {
+        localName: 'CENTER',
+        localPos: { x: 0, y: 0 },
+        localNormal: { x: 0, y: -1 },
+        type: 'center',
+        socketKind: 'center',
+        localAngleOffset: 0,
+      },
     ];
-
-    faceOffsets.forEach((f) => {
-      sockets.push({
-        id: `${piece.id}_${f.name}`,
-        pieceId: piece.id,
-        worldPos: Vec2.add(piece.position, Vec2.rotate(f.local, rot)),
-        normal: Vec2.rotate(f.norm, rot),
-        type: 'edge',
-        angle: rot,
-      });
-    });
   }
 
-  return sockets;
+  // Blocks (48x48): 4 face edges + center
+  return [
+    {
+      localName: 'TOP_EDGE',
+      localPos: { x: 0, y: -hh },
+      localNormal: { x: 0, y: -1 },
+      type: 'edge',
+      socketKind: 'block_edge',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'RIGHT_EDGE',
+      localPos: { x: hw, y: 0 },
+      localNormal: { x: 1, y: 0 },
+      type: 'edge',
+      socketKind: 'block_edge',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'BOTTOM_EDGE',
+      localPos: { x: 0, y: hh },
+      localNormal: { x: 0, y: 1 },
+      type: 'edge',
+      socketKind: 'block_edge',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'LEFT_EDGE',
+      localPos: { x: -hw, y: 0 },
+      localNormal: { x: -1, y: 0 },
+      type: 'edge',
+      socketKind: 'block_edge',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'CENTER',
+      localPos: { x: 0, y: 0 },
+      localNormal: { x: 0, y: -1 },
+      type: 'center',
+      socketKind: 'center',
+      localAngleOffset: 0,
+    },
+  ];
+}
+
+/**
+ * Transforms local-space sockets into world coordinates for any piece type, position, and rotation.
+ */
+export function getPieceSnapSocketsForTransform(
+  type: MaterialType,
+  position: Vector2,
+  rotation: number,
+  pieceId = 'candidate',
+): SnapSocket[] {
+  const defs = getLocalSocketDefinitions(type);
+  return defs.map((d) => ({
+    id: `${pieceId}_${d.localName}`,
+    pieceId,
+    localName: d.localName,
+    localPos: { ...d.localPos },
+    localNormal: { ...d.localNormal },
+    worldPos: Vec2.add(position, Vec2.rotate(d.localPos, rotation)),
+    normal: Vec2.rotate(d.localNormal, rotation),
+    type: d.type,
+    socketKind: d.socketKind,
+    angle: rotation + d.localAngleOffset,
+  }));
+}
+
+/**
+ * Computes all available snap sockets for a placed piece in world space.
+ */
+export function getPieceSnapSockets(piece: PlacedPiece): SnapSocket[] {
+  return getPieceSnapSocketsForTransform(piece.type, piece.position, piece.rotation, piece.id);
 }
 
 /**
@@ -226,9 +406,11 @@ export function getAnchorSnapSockets(anchors: EnvironmentalAnchor[]): SnapSocket
   return anchors.map((anchor) => ({
     id: `anchor_socket_${anchor.id}`,
     anchorId: anchor.id,
+    localName: 'ANCHOR_TOP',
     worldPos: { x: anchor.position.x, y: anchor.position.y - 24 }, // Socket sits on top of anchor
     normal: { x: 0, y: -1 },
     type: 'anchor',
+    socketKind: 'anchor',
     angle: 0,
   }));
 }

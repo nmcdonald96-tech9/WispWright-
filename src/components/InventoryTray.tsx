@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { PackagePlus } from 'lucide-react';
 import { MATERIAL_CONFIGS } from '../game/config';
-import { MaterialType } from '../game/types';
+import { MaterialType, SourceCardBounds } from '../game/types';
 
 interface InventoryTrayProps {
   inventory: Record<MaterialType, number>;
@@ -16,7 +16,14 @@ interface InventoryTrayProps {
   highlightFocus?: boolean;
   highlightedMaterial?: MaterialType | null;
   guidanceActive?: boolean;
-  onStartDrag: (type: MaterialType, clientX: number, clientY: number) => void;
+  activeLiftItemType?: MaterialType | null;
+  onPointerDownItem?: (
+    type: MaterialType,
+    e: React.PointerEvent<HTMLElement>,
+    cardBounds: SourceCardBounds,
+    trayTopY: number,
+  ) => void;
+  onStartDrag?: (type: MaterialType, clientX: number, clientY: number) => void;
 }
 
 export const InventoryTray: React.FC<InventoryTrayProps> = ({
@@ -27,17 +34,36 @@ export const InventoryTray: React.FC<InventoryTrayProps> = ({
   highlightFocus = false,
   highlightedMaterial = null,
   guidanceActive = false,
+  activeLiftItemType = null,
+  onPointerDownItem,
   onStartDrag,
 }) => {
+  const trayRef = useRef<HTMLDivElement | null>(null);
   const materials: MaterialType[] = ['wood_beam', 'wood_block', 'stone_block', 'bullseye_block'];
 
-  const handlePointerDown = (type: MaterialType, e: React.PointerEvent) => {
+  const handlePointerDown = (type: MaterialType, e: React.PointerEvent<HTMLElement>) => {
     if (disabled || (inventory[type] || 0) <= 0) return;
-    onStartDrag(type, e.clientX, e.clientY);
+    const cardRect = e.currentTarget.getBoundingClientRect();
+    const cardBounds: SourceCardBounds = {
+      x: cardRect.left,
+      y: cardRect.top,
+      width: cardRect.width,
+      height: cardRect.height,
+    };
+    const trayRect = trayRef.current?.getBoundingClientRect();
+    const trayTopY = trayRect ? trayRect.top : window.innerHeight - 92;
+
+    if (onPointerDownItem) {
+      onPointerDownItem(type, e, cardBounds, trayTopY);
+    } else if (onStartDrag) {
+      onStartDrag(type, e.clientX, e.clientY);
+    }
   };
 
   return (
     <div
+      ref={trayRef}
+      data-inventory-tray="true"
       className={`w-full border-t px-2.5 py-1.5 backdrop-blur-md safe-bottom transition-all ${
         highlightFocus
           ? 'bg-amber-950/60 border-amber-400 ring-1 ring-amber-400/60'
@@ -50,8 +76,8 @@ export const InventoryTray: React.FC<InventoryTrayProps> = ({
           {highlightedMaterial && guidanceActive && !isReinforcement && (
             <span className="px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-200 border border-amber-400/60 text-[9px] animate-pulse">
               {highlightedMaterial === 'wood_beam'
-                ? 'Step 1: Drag Timber Beam →'
-                : 'Step 2: Drag Wood Block →'}
+                ? 'Step 1: Drag or Tap Beam →'
+                : 'Step 2: Drag or Tap Block →'}
             </span>
           )}
           {highlightFocus && !highlightedMaterial && !isReinforcement && (
@@ -77,6 +103,7 @@ export const InventoryTray: React.FC<InventoryTrayProps> = ({
           const deliveredCount = deliveredInventory?.[type] || 0;
           const isAvailable = count > 0 && !disabled;
           const isBullseye = type === 'bullseye_block';
+          const isLiftingFromCard = activeLiftItemType === type;
           const isGuidedTarget =
             !isReinforcement && guidanceActive && highlightedMaterial === type && isAvailable;
           const isDimmedByGuidance =
@@ -88,16 +115,19 @@ export const InventoryTray: React.FC<InventoryTrayProps> = ({
           return (
             <div
               key={type}
+              data-inventory-card="true"
               onPointerDown={(e) => handlePointerDown(type, e)}
               className={`relative flex flex-col items-center justify-between p-1.5 rounded-xl border transition-all select-none touch-none ${
                 isAvailable
-                  ? isGuidedTarget
-                    ? 'bg-amber-950/75 border-amber-400 ring-2 ring-amber-400/80 shadow-lg shadow-amber-500/25 active:scale-95 cursor-grab active:cursor-grabbing'
-                    : deliveredCount > 0
-                      ? 'bg-emerald-950/50 border-emerald-500/70 hover:border-emerald-400 active:scale-95 cursor-grab active:cursor-grabbing shadow-md'
-                      : isBullseye
-                        ? 'bg-rose-950/60 border-rose-500/70 hover:border-rose-400 active:scale-95 cursor-grab active:cursor-grabbing shadow-md'
-                        : 'bg-slate-900/90 border-slate-700/80 hover:border-slate-500 active:scale-95 cursor-grab active:cursor-grabbing shadow-sm'
+                  ? isLiftingFromCard
+                    ? 'bg-cyan-950/70 border-cyan-400 ring-2 ring-cyan-400/90 scale-[0.96] shadow-inner cursor-grabbing'
+                    : isGuidedTarget
+                      ? 'bg-amber-950/75 border-amber-400 ring-2 ring-amber-400/80 shadow-lg shadow-amber-500/25 active:scale-95 cursor-grab active:cursor-grabbing'
+                      : deliveredCount > 0
+                        ? 'bg-emerald-950/50 border-emerald-500/70 hover:border-emerald-400 active:scale-95 cursor-grab active:cursor-grabbing shadow-md'
+                        : isBullseye
+                          ? 'bg-rose-950/60 border-rose-500/70 hover:border-rose-400 active:scale-95 cursor-grab active:cursor-grabbing shadow-md'
+                          : 'bg-slate-900/90 border-slate-700/80 hover:border-slate-500 active:scale-95 cursor-grab active:cursor-grabbing shadow-sm'
                   : 'bg-slate-950/50 border-slate-800/40 opacity-45 cursor-not-allowed'
               } ${isDimmedByGuidance && isAvailable ? 'opacity-70' : ''}`}
               style={{ minHeight: '62px' }}
@@ -109,7 +139,7 @@ export const InventoryTray: React.FC<InventoryTrayProps> = ({
               {/* Guided Drag Callout Badge */}
               {isGuidedTarget && (
                 <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[8px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap pointer-events-none">
-                  Drag Me
+                  Drag / Tap
                 </div>
               )}
 

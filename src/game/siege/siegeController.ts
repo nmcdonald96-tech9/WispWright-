@@ -19,6 +19,7 @@ import {
   ResultClassification,
   SiegeSummary,
   TutorialChecklistState,
+  WispContactEvent,
 } from '../types';
 import { AUTHORED_ATTACKS, DistancePreset, DISTANCE_PRESETS } from './siegeConfig';
 import {
@@ -136,14 +137,27 @@ export class SiegeController {
   } {
     const auth = this.store.getAuthoritativeTutorialState();
     const checklist = this.store.getTutorialChecklist();
-    if (this.devBypassTutorialRequirements || auth.siegeEligible) {
-      return { allowed: true, reason: null, checklist };
+    if (!this.devBypassTutorialRequirements && !auth.siegeEligible) {
+      return {
+        allowed: false,
+        reason: 'Complete the basic shelter lesson before beginning the siege.',
+        checklist,
+      };
     }
-    return {
-      allowed: false,
-      reason: 'Complete the basic shelter lesson before beginning the siege.',
-      checklist,
-    };
+    const requiresWispPlacement =
+      this.mode === 'PLACE_WISPS' ||
+      this.mode === 'PRE_SIEGE_REVIEW' ||
+      this.store.wispPlacementPhase === 'PLACE_WISPS' ||
+      this.store.wispPlacementPhase === 'PRE_SIEGE_REVIEW' ||
+      this.store.wispsRequiredBeforeSiege;
+    if (requiresWispPlacement && !this.store.areAllWispsPlacedAndValid()) {
+      return {
+        allowed: false,
+        reason: 'Place all five wisps in valid sanctuary space before beginning the siege.',
+        checklist,
+      };
+    }
+    return { allowed: true, reason: null, checklist };
   }
 
   public attemptBeginSiege(enableReinforcementPhase = true): boolean {
@@ -241,6 +255,55 @@ export class SiegeController {
     this.onStateChange?.();
   }
 
+  public enterPlaceWispsPhase(stageWisps = true): boolean {
+    const auth = this.store.getAuthoritativeTutorialState();
+    if (!this.devBypassTutorialRequirements && !auth.stableDesignAccepted) {
+      // Accept current passed design if eligible
+      if (auth.stabilityTestPassed) {
+        this.store.acceptStableDesign();
+      } else {
+        return false;
+      }
+    }
+    this.store.enterPlaceWispsPhase(stageWisps);
+    this.mode = 'PLACE_WISPS';
+    this.tutorialGateWarning = null;
+    this.checklistHighlightActive = false;
+    this.constructionTelemetry = this.buildLiveConstructionTelemetry();
+    this.onStateChange?.();
+    return true;
+  }
+
+  public enterPreSiegeReview(): boolean {
+    const ok = this.store.enterPreSiegeReview();
+    if (!ok) {
+      this.tutorialGateWarning =
+        'Place all five wisps in valid sanctuary space before entering Pre-Siege Review.';
+      this.onStateChange?.();
+      return false;
+    }
+    this.tutorialGateWarning = null;
+    this.mode = 'PRE_SIEGE_REVIEW';
+    this.refreshPreviewTargeting();
+    this.onStateChange?.();
+    return true;
+  }
+
+  public returnToPlaceWispsFromReview(): void {
+    this.store.returnToPlaceWispsFromReview();
+    this.mode = 'PLACE_WISPS';
+    this.tutorialGateWarning = null;
+    this.onStateChange?.();
+  }
+
+  public returnFromWispPhaseToBuild(): void {
+    this.store.returnFromWispPhaseToBuild();
+    this.mode = 'CONSTRUCTION';
+    this.tutorialGateWarning = null;
+    this.constructionTelemetry = this.buildLiveConstructionTelemetry();
+    this.onStateChange?.();
+  }
+
   public getAttacksRemaining(): number {
     if (
       this.mode === 'REINFORCEMENT_INTRO' ||
@@ -332,9 +395,21 @@ export class SiegeController {
     this.mode = 'PRE_ATTACK_VALIDATION';
     let overlapCount = 0;
     const pieces = state.pieces;
+    const activeJointPairs = new Set<string>();
+    for (const j of state.joints ?? []) {
+      if (j.state !== 'BROKEN') {
+        const k = j.pieceAId < j.pieceBId ? `${j.pieceAId}|${j.pieceBId}` : `${j.pieceBId}|${j.pieceAId}`;
+        activeJointPairs.add(k);
+      }
+    }
     for (let i = 0; i < pieces.length; i++) {
       const obbA = getOBBFromPiece(pieces[i]);
       for (let j = i + 1; j < pieces.length; j++) {
+        const pairKey =
+          pieces[i].id < pieces[j].id
+            ? `${pieces[i].id}|${pieces[j].id}`
+            : `${pieces[j].id}|${pieces[i].id}`;
+        if (activeJointPairs.has(pairKey)) continue;
         const obbB = getOBBFromPiece(pieces[j]);
         if (checkOBBOverlap(obbA, obbB, 1.5)) {
           overlapCount++;
@@ -348,11 +423,12 @@ export class SiegeController {
       this.overlapWarning = null;
     }
 
-    // 2. Capture immutable pre-siege snapshot (`INITIAL_DESIGN`) for lossless restoration
+    // 2. Lock wisp positions and capture immutable pre-siege snapshots (`PRE_SIEGE_WISPS` & `INITIAL_DESIGN`) for lossless restoration
+    this.store.lockWispsForSiege();
     this.store.captureSnapshot();
     this.store.saveNamedSnapshot('INITIAL_DESIGN');
 
-    // 3. Reset piece damage states & dispersed wisps in active state
+    // 3. Reset piece damage states, timber joint states & dispersed wisps in active state
     for (const piece of state.pieces) {
       piece.condition = 'INTACT';
       piece.impactSeverity = 0;
@@ -363,6 +439,16 @@ export class SiegeController {
         piece.consumedByAttackId = null;
         piece.overrideCancellationReason = null;
       }
+    }
+    for (const joint of state.joints ?? []) {
+      joint.state = 'INTACT';
+      joint.currentStress = 0;
+      joint.maxStressObserved = 0;
+      joint.brokenInPhase = null;
+      joint.brokenByAttackId = null;
+      joint.failureReason = null;
+      joint.breakPosition = undefined;
+      joint.breakTimestamp = undefined;
     }
     for (const wisp of state.wisps) {
       wisp.isDispersed = false;
@@ -570,9 +656,21 @@ export class SiegeController {
     const state = this.store.getState();
     let overlapCount = 0;
     const activePieces = state.pieces.filter((p) => p.condition !== 'LOST');
+    const activeJointPairs = new Set<string>();
+    for (const j of state.joints ?? []) {
+      if (j.state !== 'BROKEN') {
+        const k = j.pieceAId < j.pieceBId ? `${j.pieceAId}|${j.pieceBId}` : `${j.pieceBId}|${j.pieceAId}`;
+        activeJointPairs.add(k);
+      }
+    }
     for (let i = 0; i < activePieces.length; i++) {
       const obbA = getOBBFromPiece(activePieces[i]);
       for (let j = i + 1; j < activePieces.length; j++) {
+        const pairKey =
+          activePieces[i].id < activePieces[j].id
+            ? `${activePieces[i].id}|${activePieces[j].id}`
+            : `${activePieces[j].id}|${activePieces[i].id}`;
+        if (activeJointPairs.has(pairKey)) continue;
         const obbB = getOBBFromPiece(activePieces[j]);
         if (checkOBBOverlap(obbA, obbB, 1.5)) {
           overlapCount++;
@@ -1034,6 +1132,11 @@ export class SiegeController {
         bullseyePiece.condition !== 'LOST',
     );
 
+    const joints = state.joints ?? [];
+    const jointsIntact = joints.filter((j) => j.state === 'INTACT').length;
+    const jointsStrained = joints.filter((j) => j.state === 'STRAINED').length;
+    const jointsBroken = joints.filter((j) => j.state === 'BROKEN').length;
+
     return {
       survived,
       tutorialCompletionAwarded,
@@ -1045,6 +1148,9 @@ export class SiegeController {
       piecesCracked,
       piecesBroken,
       piecesLost,
+      jointsIntact,
+      jointsStrained,
+      jointsBroken,
       reserveRemaining: { ...state.inventory },
       totalReserveRemaining,
       reinforcementMaterialsUsed: this.store.reinforcementMaterialsUsed,
@@ -1098,7 +1204,7 @@ export class SiegeController {
       this.physicsBridge.teardown();
       this.physicsBridge = null;
     }
-    this.store.restorePreTestSnapshot();
+    this.store.restoreForRetryDesign();
     this.mode = 'CONSTRUCTION';
     this.currentAttack = null;
     this.currentAttackIndex = 0;
@@ -1149,12 +1255,16 @@ export class SiegeController {
   }
 
   public replaySameSiege(): void {
-    this.store.restorePreTestSnapshot();
+    this.store.restoreForRetryDesign();
     this.startSiege(this.autoEnterReinforcement);
   }
 
   public returnToConstruction(): void {
     this.retryDesign();
+  }
+
+  public getWispContactEvents(): WispContactEvent[] {
+    return this.physicsBridge?.getWispContactEvents() ?? [];
   }
 
   // --- Developer Test Controls ---
@@ -1360,6 +1470,11 @@ export class SiegeController {
       this.mode = 'CONSTRUCTION';
     } else if (result.recoveredPhase === 'SETTLED') {
       this.mode = 'SETTLED';
+    } else if (result.recoveredPhase === 'PLACE_WISPS') {
+      this.mode = 'PLACE_WISPS';
+    } else if (result.recoveredPhase === 'PRE_SIEGE_REVIEW') {
+      this.mode = 'PRE_SIEGE_REVIEW';
+      this.refreshPreviewTargeting();
     } else if (result.recoveredPhase === 'REINFORCEMENT_ACTIVE') {
       this.mode = 'REINFORCEMENT_ACTIVE';
       this.reinforcementTimerPaused = false;

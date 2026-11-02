@@ -273,7 +273,9 @@ export const ActionControls: React.FC<ActionControlsProps> = ({
     mode === 'SETTLING' ||
     mode === 'SEQUENCE_COMPLETE' ||
     mode === 'RESULTS' ||
-    mode === 'UNLOCK_PRESENTATION';
+    mode === 'UNLOCK_PRESENTATION' ||
+    mode === 'PLACE_WISPS' ||
+    mode === 'PRE_SIEGE_REVIEW';
 
   if (isActiveSiegeSimulation) {
     return null;

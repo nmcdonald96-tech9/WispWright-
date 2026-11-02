@@ -10,6 +10,16 @@ import { SiegeController } from './siegeController';
 import { Camera } from '../input/camera';
 import { MaterialType, PlacedPiece } from '../types';
 
+if (typeof (globalThis as any).localStorage === 'undefined') {
+  const storageMap = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => storageMap.get(key) ?? null,
+    setItem: (key: string, val: string) => storageMap.set(key, String(val)),
+    removeItem: (key: string) => storageMap.delete(key),
+    clear: () => storageMap.clear(),
+  };
+}
+
 function assert(condition: boolean, message: string): void {
   if (!condition) {
     throw new Error(`ASSERTION FAILED: ${message}`);
@@ -210,7 +220,7 @@ console.log('================================================================\n'
   );
 
   // Now modify the fortress (place another block) -> revision increments & invalidates prior stability test
-  store.placePiece(makePiece('stone_block', 302, 756, 0));
+  store.placePiece(makePiece('stone_block', 104, 756, 0));
   tut = store.getAuthoritativeTutorialState();
   assert(
     tut.currentConstructionRevision === revBeforeTest + 1,

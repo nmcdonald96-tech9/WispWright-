@@ -11,9 +11,21 @@ import { PresentationDirector } from '../presentation/presentationDirector';
 import { SiegeController } from '../siege/siegeController';
 import { AUTHORED_ATTACKS } from '../siege/siegeConfig';
 import { LevelStore } from '../state/levelStore';
-import { DragState, GameMode, PlacedPiece, StabilityReport, Vector2 } from '../types';
+import {
+  DragState,
+  GameMode,
+  PlacedPiece,
+  StabilityReport,
+  Vector2,
+  WispDragState,
+} from '../types';
 import { renderEnvironment } from './renderEnvironment';
-import { renderGizmos, renderTutorialGuidanceOverlay } from './renderGizmos';
+import {
+  renderGizmos,
+  renderTimberJoints,
+  renderTutorialGuidanceOverlay,
+  renderWispClearanceAndPlacementOverlay,
+} from './renderGizmos';
 import { renderLauncher } from './renderLauncher';
 import { renderPiece } from './renderPieces';
 import {
@@ -41,6 +53,8 @@ export class CanvasRenderer {
   public mode: GameMode = 'CONSTRUCTION';
   public selectedPieceId: string | null = null;
   public dragState: DragState | null = null;
+  public wispDragState: WispDragState | null = null;
+  public selectedWispId: string | null = null;
   public touchContactWorldPos?: Vector2;
 
   // Stability callback for UI
@@ -140,15 +154,60 @@ export class CanvasRenderer {
     }
   }
 
-  public acceptStableDesign(): boolean {
+  public acceptStableDesign(enterPlaceWisps = true): boolean {
     if (this.physicsBridge) {
       this.physicsBridge.teardown();
       this.physicsBridge = null;
     }
-    this.mode = 'CONSTRUCTION';
     const accepted = this.siegeController.acceptStableDesignFromTest();
+    if (accepted && enterPlaceWisps) {
+      this.siegeController.enterPlaceWispsPhase(true);
+      this.mode = 'PLACE_WISPS';
+      this.selectedWispId = 'wisp_ignis';
+    } else {
+      this.mode = 'CONSTRUCTION';
+    }
     soundSynth.playSettledFanfare();
     return accepted;
+  }
+
+  public enterPlaceWispsPhase(stageWisps = true): boolean {
+    if (this.physicsBridge) {
+      this.physicsBridge.teardown();
+      this.physicsBridge = null;
+    }
+    const ok = this.siegeController.enterPlaceWispsPhase(stageWisps);
+    if (ok) {
+      this.mode = 'PLACE_WISPS';
+      const firstUnplaced = this.store.getState().wisps.find((w) => w.placed === false);
+      this.selectedWispId = firstUnplaced ? firstUnplaced.id : 'wisp_ignis';
+      soundSynth.playSnap();
+    }
+    return ok;
+  }
+
+  public enterPreSiegeReview(): boolean {
+    this.wispDragState = null;
+    const ok = this.siegeController.enterPreSiegeReview();
+    if (ok) {
+      this.mode = 'PRE_SIEGE_REVIEW';
+      soundSynth.playSnap();
+    }
+    return ok;
+  }
+
+  public returnToPlaceWispsFromReview(): void {
+    this.siegeController.returnToPlaceWispsFromReview();
+    this.mode = 'PLACE_WISPS';
+    soundSynth.playSnap();
+  }
+
+  public returnFromWispPhaseToBuild(): void {
+    this.wispDragState = null;
+    this.selectedWispId = null;
+    this.siegeController.returnFromWispPhaseToBuild();
+    this.mode = 'CONSTRUCTION';
+    soundSynth.playSnap();
   }
 
   public returnToBuildFromTest(): void {
@@ -169,6 +228,8 @@ export class CanvasRenderer {
 
     this.selectedPieceId = null;
     this.dragState = null;
+    this.wispDragState = null;
+    this.selectedWispId = null;
     this.povStepAccumulator = 0;
     this.presentationDirector.skipReplay();
     if (this.physicsBridge) {
@@ -554,6 +615,7 @@ export class CanvasRenderer {
 
     // 3. Render Alchemical Launcher & Trajectory Preview
     const showTrajectory =
+      effectiveMode === 'PRE_SIEGE_REVIEW' ||
       effectiveMode === 'AIMING_PREVIEW' ||
       effectiveMode === 'ENEMY_INTRODUCTION' ||
       effectiveMode === 'THREAT_PREVIEW' ||
@@ -624,6 +686,15 @@ export class CanvasRenderer {
             : undefined,
         );
       }
+      renderTimberJoints(
+        ctx,
+        activeBridge.getSimulatedJoints(),
+        simulatedTransforms,
+        true,
+        this.timeSec,
+        reducedMotion,
+        isDeveloperMode,
+      );
     } else {
       for (const piece of state.pieces) {
         if (piece.condition === 'LOST') continue;
@@ -653,6 +724,15 @@ export class CanvasRenderer {
             : undefined,
         );
       }
+      renderTimberJoints(
+        ctx,
+        state.joints,
+        state.pieces,
+        false,
+        this.timeSec,
+        reducedMotion,
+        isDeveloperMode,
+      );
     }
 
     // 5. Render Active Projectile (or Developer Flight Preview)
@@ -717,7 +797,20 @@ export class CanvasRenderer {
     // 7. Render Cosmetic Particles (Impact sparks, dispersal runes, dust)
     this.renderCosmeticParticles(ctx);
 
-    // 8. Render Tutorial Guidance Overlay & Gizmos in Construction & Reinforcement Mode
+    // 8. Render Tutorial Guidance Overlay, Wisp Placement / Clearance Overlay & Gizmos
+    renderWispClearanceAndPlacementOverlay(
+      ctx,
+      state.wisps,
+      this.dragState,
+      this.wispDragState,
+      this.selectedWispId,
+      effectiveMode,
+      this.timeSec,
+      reducedMotion,
+      state.pieces,
+      state.anchors,
+    );
+
     if (isEditableMode(effectiveMode)) {
       if (
         effectiveMode === 'CONSTRUCTION' ||
@@ -736,6 +829,10 @@ export class CanvasRenderer {
         this.dragState,
         this.getSelectedPiece(),
         this.touchContactWorldPos,
+        isDeveloperMode,
+        this.store.lastRotationDiagnostics,
+        state.pieces,
+        state.wisps,
       );
     }
 
