@@ -163,7 +163,7 @@ console.log('=== WISP ENCLOSURE PLACEMENT RULE CORRECTION ACCEPTANCE SUITE (A - 
 }
 
 // -----------------------------------------------------------------------------
-// TEST C: INDIVIDUAL CHAMBERS (ALL FIVE WISPS ENCLOSED)
+// TEST C: INDIVIDUAL CHAMBERS (ALL ACTIVE WISPS ENCLOSED)
 // -----------------------------------------------------------------------------
 {
   const store = new LevelStore();
@@ -171,43 +171,30 @@ console.log('=== WISP ENCLOSURE PLACEMENT RULE CORRECTION ACCEPTANCE SUITE (A - 
   const sc = new SiegeController(store);
   sc.skipOpeningSequence();
 
-  // Build 5 separate protected enclosed chambers across sanctuary:
+  // Build separate protected enclosed chambers across sanctuary:
   // Ground level divider blocks
   store.placePiece(makePiece('wood_block', 300, 756, 0));
   store.placePiece(makePiece('wood_block', 500, 756, 0));
 
-  // Ground level lintel beams
-  store.placePiece(makePiece('wood_beam', 250, 720, 0));
-  store.placePiece(makePiece('wood_beam', 350, 720, 0));
+  // Ground level lintel beams (144px wide each, spanning [200..344] and [378..522] without overlapping)
+  store.placePiece(makePiece('wood_beam', 272, 720, 0));
   store.placePiece(makePiece('wood_beam', 450, 720, 0));
-  store.placePiece(makePiece('wood_beam', 550, 720, 0));
 
   // Elevated chamber walls and roof
-  store.placePiece(makePiece('wood_block', 350, 684, 0));
+  store.placePiece(makePiece('wood_block', 300, 684, 0));
   store.placePiece(makePiece('wood_block', 450, 684, 0));
-  store.placePiece(makePiece('wood_beam', 400, 648, 0));
+  store.placePiece(makePiece('wood_beam', 375, 648, 0));
 
   const testRes = sc.runTutorialStabilityTest(2.5, false);
   assert(testRes.passed === true, 'Test C: Stability passed');
   sc.enterPlaceWispsPhase(true);
 
-  // Place 5 wisps in their distinct sheltered/enclosed positions
+  // Place the 3 Level 1 wisps in their distinct sheltered/enclosed positions
   const p1 = store.placeWisp('wisp_ignis', { x: 250, y: 756 });
   const p2 = store.placeWisp('wisp_zephyr', { x: 350, y: 756 });
-  const p3 = store.placeWisp('wisp_terran', { x: 400, y: 684 });
   const p4 = store.placeWisp('wisp_marinus', { x: 450, y: 756 });
-  const p5 = store.placeWisp('wisp_aetheris', { x: 550, y: 756 });
 
-  if (!p1.success || !p2.success || !p3.success || !p4.success || !p5.success) {
-    console.log('FAIL DETAILS:', {
-      p1: p1.validation,
-      p2: p2.validation,
-      p3: p3.validation,
-      p4: p4.validation,
-      p5: p5.validation,
-    });
-  }
-  assert(p1.success && p2.success && p3.success && p4.success && p5.success, 'Test C: All 5 wisps placed successfully');
+  assert(p1.success && p2.success && p4.success, 'Test C: All 3 Level 1 wisps placed successfully in individual chambers');
   assert(store.areAllWispsPlacedAndValid() === true, 'Test C: areAllWispsPlacedAndValid() is true');
 
   // Confirm Pre-Siege Review becomes available
@@ -366,12 +353,10 @@ console.log('=== WISP ENCLOSURE PLACEMENT RULE CORRECTION ACCEPTANCE SUITE (A - 
   sc.runTutorialStabilityTest(2.5, false);
   sc.enterPlaceWispsPhase(true);
 
-  // Place all 5 wisps, with Ignis inside the sealed chamber at (250, 756)
+  // Place all 3 Level 1 wisps, with Ignis inside the sealed chamber at (250, 756)
   assert(store.placeWisp('wisp_ignis', { x: 250, y: 756 }).success, 'Test G: Placed Ignis enclosed');
   assert(store.placeWisp('wisp_zephyr', { x: 340, y: 740 }).success, 'Test G: Placed Zephyr');
-  assert(store.placeWisp('wisp_terran', { x: 400, y: 704 }).success, 'Test G: Placed Terran');
   assert(store.placeWisp('wisp_marinus', { x: 460, y: 740 }).success, 'Test G: Placed Marinus');
-  assert(store.placeWisp('wisp_aetheris', { x: 520, y: 740 }).success, 'Test G: Placed Aetheris');
 
   // Evaluate targeting for Attack 1 (Standard Attacker)
   const attack1 = { ...AUTHORED_ATTACKS[0], spawnPosition: { x: DISTANCE_PRESETS.STANDARD.launcherX, y: DISTANCE_PRESETS.STANDARD.launcherY } };
@@ -424,9 +409,7 @@ console.log('=== WISP ENCLOSURE PLACEMENT RULE CORRECTION ACCEPTANCE SUITE (A - 
 
   store.placeWisp('wisp_ignis', { x: 350, y: 720 });
   store.placeWisp('wisp_zephyr', { x: 250, y: 740 });
-  store.placeWisp('wisp_terran', { x: 450, y: 740 });
   store.placeWisp('wisp_marinus', { x: 500, y: 740 });
-  store.placeWisp('wisp_aetheris', { x: 550, y: 740 });
 
   sc.enterPreSiegeReview();
   sc.startSiege(true);
@@ -483,8 +466,8 @@ console.log('=== WISP ENCLOSURE PLACEMENT RULE CORRECTION ACCEPTANCE SUITE (A - 
   // Verify normal BUILD flow has zero battlefield wisps
   const diag = store.getWispPresenceDiagnostics('CONSTRUCTION');
   assert(
-    diag.wispBattlefieldCount === 0 && diag.wispBlockerCount === 0 && diag.wispStagingCount === 5,
-    'Test I: Zero wisps on battlefield in BUILD',
+    diag.wispBattlefieldCount === 0 && diag.wispBlockerCount === 0 && diag.wispStagingCount === 3,
+    'Test I: Zero wisps on battlefield in BUILD (3 in staging)',
   );
 
   // Verify rotation transaction validation rejects intersecting rotation

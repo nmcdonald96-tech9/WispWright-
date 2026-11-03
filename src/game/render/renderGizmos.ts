@@ -82,20 +82,38 @@ export function renderTimberJoints(
     const midX = (worldA.x + worldB.x) * 0.5;
     const midY = (worldA.y + worldB.y) * 0.5;
     const isStrained = joint.state === 'STRAINED';
+    const isRoofPeak = joint.jointType === 'ROOF_PEAK' || joint.visualJointCapType === 'PEAK_CAP';
+    const isBrace = joint.jointType === 'DIAGONAL_BRACE';
+    const isAlchemical =
+      joint.visualJointCapType === 'ALCHEMICAL_CLAMP' ||
+      joint.materialPairKey === 'WOOD_STONE' ||
+      joint.materialPairKey === 'WOOD_ENVIRONMENT';
+    const isMasonry =
+      joint.visualJointCapType === 'MASONRY_SEAM' ||
+      joint.materialPairKey === 'STONE_STONE' ||
+      joint.materialPairKey === 'STONE_ENVIRONMENT';
 
     ctx.save();
 
-    // Connecting iron/rope lashing strap between the two joined sockets
+    // Connecting binding strap between the two joined sockets
     ctx.strokeStyle = isStrained
       ? `rgba(245, 158, 11, ${0.85 + pulse * 0.15})`
-      : 'rgba(45, 212, 191, 0.82)';
+      : isRoofPeak
+        ? 'rgba(56, 189, 248, 0.88)'
+        : isAlchemical
+          ? 'rgba(192, 132, 252, 0.9)'
+          : isMasonry
+            ? 'rgba(148, 163, 184, 0.9)'
+            : isBrace
+              ? 'rgba(16, 185, 129, 0.88)'
+              : 'rgba(45, 212, 191, 0.82)';
     ctx.lineWidth = isStrained ? 3.2 : 2.5;
     ctx.beginPath();
     ctx.moveTo(worldA.x, worldA.y);
     ctx.lineTo(worldB.x, worldB.y);
     ctx.stroke();
 
-    // Joinery gusset plate / lashing diamond at midpoint
+    // Joinery gusset plate / apex cap / alchemical clamp / masonry glyph at midpoint
     ctx.translate(midX, midY);
     if (isStrained) {
       // Strain warning halo
@@ -105,21 +123,55 @@ export function renderTimberJoints(
       ctx.fill();
     }
 
-    ctx.rotate(Math.PI / 4);
-    ctx.fillStyle = isStrained ? '#f59e0b' : '#14b8a6';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 1.4;
-    const r = isStrained ? 5 : 4.2;
-    ctx.fillRect(-r, -r, r * 2, r * 2);
-    ctx.strokeRect(-r, -r, r * 2, r * 2);
+    if (isRoofPeak) {
+      // Roof peak chevron ridge cap
+      ctx.fillStyle = isStrained ? '#f59e0b' : '#38bdf8';
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(0, -6.5);
+      ctx.lineTo(6.5, 4);
+      ctx.lineTo(-6.5, 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (isAlchemical) {
+      // Wood-to-Stone Alchemical Clamp / glowing purple-cyan rune band
+      ctx.fillStyle = isStrained ? '#f59e0b' : '#c084fc';
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, isStrained ? 5.6 : 4.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(0, 0, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (isMasonry) {
+      // Stone-to-Stone Mortar Seam / Masonry Glyph
+      ctx.fillStyle = isStrained ? '#f59e0b' : '#94a3b8';
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.4;
+      ctx.fillRect(-5.2, -3.2, 10.4, 6.4);
+      ctx.strokeRect(-5.2, -3.2, 10.4, 6.4);
+    } else {
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = isStrained ? '#f59e0b' : isBrace ? '#10b981' : '#14b8a6';
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 1.4;
+      const r = isStrained ? 5 : 4.2;
+      ctx.fillRect(-r, -r, r * 2, r * 2);
+      ctx.strokeRect(-r, -r, r * 2, r * 2);
+      ctx.rotate(-Math.PI / 4);
+    }
 
     if (isDeveloperMode) {
-      ctx.rotate(-Math.PI / 4);
       ctx.font = '700 8.5px monospace';
       ctx.fillStyle = isStrained ? '#fde68a' : '#99f6e4';
       ctx.textAlign = 'center';
       ctx.fillText(
-        `${joint.state} (${joint.currentStress.toFixed(1)})`,
+        `${joint.jointType} · ${joint.materialPairKey ?? 'WOOD_WOOD'} · ${joint.state} (${joint.currentStress.toFixed(1)})`,
         0,
         -10,
       );
@@ -355,7 +407,7 @@ export function renderGizmos(
       ctx.fillText(badgeText, bx + 8, by + 10);
       ctx.restore();
     } else if (dragState.activeSnap) {
-      // Valid Snap Badge: clearly distinguish Environmental Anchor, Timber Joint, Supported Contact, and Position Snap
+      // Valid Snap Badge: clearly distinguish Environmental Anchor, Roof Peak, Diagonal Brace, Timber Splice, Timber Face, T-Joint, Supported Contact, and Position Snap
       ctx.save();
       const isAnchor = dragState.activeSnap.socket.type === 'anchor';
       const isTimberJoint = dragState.connectionCategory === 'TIMBER_JOINT';
@@ -363,6 +415,43 @@ export function renderGizmos(
       const currDeg = Math.round(((dragState.rotation * 180) / Math.PI) % 360);
       const normCurrDeg = currDeg < 0 ? currDeg + 360 : currDeg;
       const compat = dragState.activeSnap.compatibilityLabel || 'SURFACE_CONTACT';
+      const taxonomy = dragState.connectionTaxonomy || 'SUPPORTED_CONTACT';
+      const jointCount = dragState.proposedTimberJoints?.length ?? (dragState.proposedTimberJoint ? 1 : 0);
+
+      // Render Balanced Peak Adjustment Partner Preview Outline when active
+      if (
+        dragState.balancedAdjustmentActive &&
+        dragState.partnerPieceAdjustment &&
+        allPieces
+      ) {
+        const partner = allPieces.find((p) => p.id === dragState.partnerPieceAdjustment?.pieceId);
+        if (partner) {
+          const pCfg = MATERIAL_CONFIGS[partner.type];
+          const adjPos =
+            dragState.partnerPieceAdjustment.afterPos ??
+            dragState.partnerPieceAdjustment.proposedPosition ??
+            partner.position;
+          ctx.save();
+          ctx.translate(adjPos.x, adjPos.y);
+          ctx.rotate(partner.rotation);
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 3]);
+          ctx.strokeRect(-pCfg.width / 2, -pCfg.height / 2, pCfg.width, pCfg.height);
+          ctx.restore();
+        }
+      }
+
+      // Highlight secondary proposed joint endpoints if a piece links at both ends
+      if (dragState.proposedTimberJoints && dragState.proposedTimberJoints.length > 1) {
+        for (const pj of dragState.proposedTimberJoints) {
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 2.4;
+          ctx.beginPath();
+          ctx.arc(pj.worldPosition.x, pj.worldPosition.y, 10, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
 
       let badgeText: string;
       let bgColor = 'rgba(67, 20, 7, 0.92)';
@@ -382,14 +471,45 @@ export function renderGizmos(
           textColor = '#ccfbf1';
         }
       } else if (isTimberJoint) {
-        const jointLabel =
-          compat === 'BEAM_END_TO_BEAM_SIDE' ? 'TIMBER FRAME JOINT' : 'TIMBER JOINT';
+        let jointLabel = 'TIMBER JOINT';
+        if (taxonomy === 'ROOF_PEAK') {
+          if (dragState.roofSupportSummary) {
+            jointLabel = dragState.roofSupportSummary.summaryMessage.toUpperCase();
+          } else {
+            jointLabel = dragState.lowerSupportsDetected
+              ? 'ROOF PEAK (SUPPORTED APEX)'
+              : 'ROOF PEAK (NEEDS LOWER SUPPORTS)';
+          }
+        } else if (taxonomy === 'TIMBER_CORNER') {
+          jointLabel = 'TIMBER CORNER JOINT';
+        } else if (taxonomy === 'RAFTER_CORNER_SEAT') {
+          jointLabel = 'CORNER JOINT';
+        } else if (taxonomy === 'DIAGONAL_BRACE') {
+          jointLabel = jointCount > 1 ? `BRACE JOINT (${jointCount} ENDS LINKED)` : 'BRACE JOINT';
+        } else if (taxonomy === 'TIMBER_SPLICE') {
+          jointLabel = 'TIMBER SPLICE';
+        } else if (taxonomy === 'TIMBER_T_JOINT') {
+          jointLabel = 'TIMBER T-JOINT';
+        } else if (taxonomy === 'TIMBER_FACE') {
+          jointLabel = 'TIMBER FACE JOINT';
+        }
+        const cycleSuffix =
+          (dragState.candidateCycleCount ?? 0) > 1
+            ? ` [${(dragState.candidateCycleIndex ?? 0) + 1}/${dragState.candidateCycleCount} · Tab]`
+            : '';
         badgeText = isDeveloperMode
-          ? `🔗 ${jointLabel}: Timber endpoints can connect here. (${normCurrDeg}° · ${dragState.activeSnap.pieceSocket?.localName}→${dragState.activeSnap.socket.localName})`
-          : `🔗 ${jointLabel} — Timber endpoints can connect here. (${normCurrDeg}°)`;
-        bgColor = 'rgba(6, 78, 59, 0.95)';
-        borderColor = '#10b981';
-        textColor = '#d1fae5';
+          ? `🔗 ${jointLabel}: (${normCurrDeg}° · ${dragState.activeSnap.pieceSocket?.localName}→${dragState.activeSnap.socket.localName})${cycleSuffix}`
+          : `🔗 ${jointLabel} (${normCurrDeg}°)${cycleSuffix}`;
+        bgColor = taxonomy === 'ROOF_PEAK' ? 'rgba(8, 47, 73, 0.95)' : 'rgba(6, 78, 59, 0.95)';
+        borderColor = taxonomy === 'ROOF_PEAK' ? '#38bdf8' : '#10b981';
+        textColor = taxonomy === 'ROOF_PEAK' ? '#e0f2fe' : '#d1fae5';
+      } else if (taxonomy === 'RAFTER_CORNER_SEAT') {
+        badgeText = isDeveloperMode
+          ? `✦ CORNER SUPPORTED (${compat} · ${normCurrDeg}°)`
+          : `✦ CORNER SUPPORTED (${normCurrDeg}°)`;
+        bgColor = 'rgba(67, 20, 7, 0.92)';
+        borderColor = '#f59e0b';
+        textColor = '#fef3c7';
       } else if (
         compat === 'BEAM_END_TO_BLOCK_EDGE' ||
         compat === 'BLOCK_EDGE_TO_BEAM_END'
@@ -849,7 +969,7 @@ export function renderWispClearanceAndPlacementOverlay(
     // Zone header label at top of sanctuary region
     const headerLabel =
       mode === 'PLACE_WISPS'
-        ? '✦ VALID WISP SANCTUARY REGION — DRAG OR TAP TO PLACE ALL 5 WISPS'
+        ? `✦ VALID WISP SANCTUARY REGION — DRAG OR TAP TO PLACE ALL ${wisps.length} WISPS`
         : '✦ PRE-SIEGE SANCTUARY FORMATION LOCKED FOR REVIEW';
     ctx.font = '700 10px system-ui, sans-serif';
     const htw = ctx.measureText(headerLabel).width;

@@ -449,10 +449,7 @@ export default function App() {
   const handleStartOver = () => {
     if (!rendererRef.current) return;
     gestureRef.current?.completeOrCancelActiveDragSafely();
-    rendererRef.current.presentationDirector.skipReplay();
-    rendererRef.current.siegeController.startOver();
-    rendererRef.current.setMode('CONSTRUCTION');
-    rendererRef.current.camera.resetView();
+    rendererRef.current.resetLevel();
     setMode('CONSTRUCTION');
     setSelectedPiece(null);
     setStabilityReport((prev) => ({ ...prev, isSimulating: false }));
@@ -473,6 +470,8 @@ export default function App() {
     syncStateFromStore();
   };
 
+  const [manualBindCandidateIndex, setManualBindCandidateIndex] = useState(0);
+
   const handleRotateSelected = (deltaAngle: number) => {
     if (!selectedPiece) return;
     if (gestureRef.current) {
@@ -484,9 +483,32 @@ export default function App() {
     syncStateFromStore();
   };
 
-  const handleDetachSelectedConnection = () => {
+  const handleBindSelectedConnection = () => {
     if (!selectedPiece) return;
-    if (gestureRef.current) {
+    const created = storeRef.current.bindPieceConnection(
+      selectedPiece.id,
+      manualBindCandidateIndex,
+    );
+    if (created) {
+      soundSynth.playPlace(selectedPiece.type);
+      setManualBindCandidateIndex(0);
+      syncStateFromStore();
+    }
+  };
+
+  const handleCycleBindCandidate = () => {
+    setManualBindCandidateIndex((prev) => prev + 1);
+  };
+
+  const handleDetachSelectedConnection = (jointId?: string) => {
+    if (!selectedPiece) return;
+    if (jointId) {
+      if (gestureRef.current) {
+        gestureRef.current.detachSelectedTimberJoint(jointId);
+      } else {
+        storeRef.current.detachTimberJoints(selectedPiece.id, jointId);
+      }
+    } else if (gestureRef.current) {
       gestureRef.current.detachSelectedPieceConnection();
     } else {
       storeRef.current.detachPieceConnection(selectedPiece.id);
@@ -528,12 +550,9 @@ export default function App() {
 
   const handleClearStorage = () => {
     gestureRef.current?.completeOrCancelActiveDragSafely();
-    storeRef.current.clearStorage();
-    rendererRef.current?.siegeController.startOver();
+    storeRef.current.clearAllPrototypeData();
+    rendererRef.current?.resetLevel();
     setSelectedPiece(null);
-    if (rendererRef.current) {
-      rendererRef.current.camera.resetView();
-    }
     setMode('CONSTRUCTION');
     soundSynth.playRemove();
     syncStateFromStore();
@@ -655,6 +674,11 @@ export default function App() {
         tutorialGateWarning={sc?.tutorialGateWarning ?? null}
         presentationMode={presSettings.presentationMode}
         snapping={snapping}
+        activeConnectionHint={storeRef.current.activeConnectionHint?.text ?? null}
+        onDismissConnectionHint={() => {
+          storeRef.current.dismissConnectionHint();
+          syncStateFromStore();
+        }}
         onAdvanceIntro={() => {
           pd?.recordSkip('OPENING_STEP');
           sc?.advanceOpeningSequence();
@@ -700,10 +724,23 @@ export default function App() {
                   .filter((j) => j.state !== 'BROKEN').length
               : 0
           }
+          activeJoints={
+            selectedPiece
+              ? storeRef.current
+                  .getJointsForPiece(selectedPiece.id)
+                  .filter((j) => j.state !== 'BROKEN')
+              : []
+          }
+          manualBindCandidates={
+            selectedPiece ? storeRef.current.getManualBindCandidates(selectedPiece.id) : []
+          }
+          manualBindCandidateIndex={manualBindCandidateIndex}
           isDragging={Boolean(activeDragState)}
           isReinforcement={isReinforcement}
           isPositionedTop={isToolbarPositionedTop}
           onRotate={handleRotateSelected}
+          onBindConnection={handleBindSelectedConnection}
+          onCycleBindCandidate={handleCycleBindCandidate}
           onDetachConnection={handleDetachSelectedConnection}
           onRemove={handleRemoveSelected}
           onDeselect={handleDeselect}
@@ -720,6 +757,10 @@ export default function App() {
           }}
           onAcceptSnapAngle={() => {
             gestureRef.current?.acceptProposedSnapRotation();
+            syncStateFromStore();
+          }}
+          onCycleCandidate={() => {
+            gestureRef.current?.cycleSnapCandidate();
             syncStateFromStore();
           }}
           onConfirm={() => {
@@ -1135,6 +1176,16 @@ export default function App() {
         }}
         onDevCompareOrdinaryVsBullseyeTarget={() => {
           sc?.devCompareOrdinaryVsBullseyeTarget();
+          syncStateFromStore();
+        }}
+        developerWispOverrideDiagnostics={storeRef.current.getDeveloperWispOverrideDiagnostics()}
+        onSetDeveloperWispCountOverride={(count) => {
+          storeRef.current.setDeveloperWispCountOverride(count);
+          syncStateFromStore();
+        }}
+        balanceTelemetryHistory={sc?.getBalanceTelemetryHistory() ?? []}
+        onClearBalanceTelemetryHistory={() => {
+          sc?.clearBalanceTelemetryHistory();
           syncStateFromStore();
         }}
       />

@@ -243,8 +243,8 @@ console.log('=== PHASE 5: BULLSEYE BLOCK (TAUNT V1) & TACTICAL SCOPE ACCEPTANCE 
 
   const activeWisps = store.getState().wisps.filter((w) => !w.isDispersed).length;
   assert(
-    activeWisps >= 4,
-    `Test C: Redirecting Attack 1 to the sacrificial decoy must protect the main wisp cluster (>= 4 wisps stable), got ${activeWisps}`,
+    activeWisps >= 2,
+    `Test C: Redirecting Attack 1 to the sacrificial decoy must protect the main wisp cluster (>= 2 of 3 wisps stable), got ${activeWisps}`,
   );
 
   sc.physicsBridge?.teardown();
@@ -271,8 +271,8 @@ console.log('=== PHASE 5: BULLSEYE BLOCK (TAUNT V1) & TACTICAL SCOPE ACCEPTANCE 
   const impactDistD = sc.targetingDiagnostics?.distanceBetweenImpactAndBullseye ?? 999;
   const activeWispsAfterAbsorb = store.getState().wisps.filter((w) => !w.isDispersed).length;
   assert(
-    impactDistD < 65 && activeWispsAfterAbsorb >= 4,
-    `Test D: Reinforced Bullseye bastion must draw the attack (dist=${impactDistD}) and limit damage (>= 4 wisps stable, got ${activeWispsAfterAbsorb})`,
+    impactDistD < 65 && activeWispsAfterAbsorb >= 2,
+    `Test D: Reinforced Bullseye bastion must draw the attack (dist=${impactDistD}) and limit damage (>= 2 of 3 wisps stable, got ${activeWispsAfterAbsorb})`,
   );
 
   sc.physicsBridge?.teardown();

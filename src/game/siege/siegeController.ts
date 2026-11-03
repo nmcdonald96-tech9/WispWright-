@@ -4,11 +4,14 @@
  */
 
 import { soundSynth } from '../audio/synth';
+import { formatWispCountWord } from '../config';
 import { checkOBBOverlap, getOBBFromPiece } from '../math/geometry';
 import { PhysicsBridge } from '../physics/physicsBridge';
 import { LevelStore } from '../state/levelStore';
 import {
+  AttackBalanceTelemetry,
   AttackOutcome,
+  AttemptBalanceTelemetry,
   AuthoredAttack,
   ConstructionRelevanceTelemetry,
   GameMode,
@@ -19,7 +22,9 @@ import {
   ResultClassification,
   SiegeSummary,
   TutorialChecklistState,
+  Vector2,
   WispContactEvent,
+  WispShelterStatus,
 } from '../types';
 import { AUTHORED_ATTACKS, DistancePreset, DISTANCE_PRESETS } from './siegeConfig';
 import {
@@ -58,7 +63,7 @@ export class SiegeController {
   public devBypassTutorialRequirements = false;
   public tutorialGateWarning: string | null = null;
   public checklistHighlightActive = false;
-  private wasStartedViaPlayerGate = false;
+  public wasStartedViaPlayerGate = false;
   public constructionTelemetry: ConstructionRelevanceTelemetry;
 
   // Phase timers
@@ -83,10 +88,67 @@ export class SiegeController {
   public onBeforeReinforcementFinish?: () => void;
   private prevDispersedCount = 0;
 
+  // Observational Balance Telemetry (Bounded history: max 25 attempts)
+  private static readonly TELEMETRY_STORAGE_KEY = 'alchemical_fortress_balance_telemetry_v1';
+  private static readonly MAX_TELEMETRY_HISTORY = 25;
+  public currentAttemptTelemetry: AttemptBalanceTelemetry | null = null;
+  public attemptTelemetryHistory: AttemptBalanceTelemetry[] = [];
+  private preReinforcementPieceCount = 0;
+  private preReinforcementJointCount = 0;
+
   constructor(store: LevelStore, onStateChange?: () => void) {
     this.store = store;
     this.onStateChange = onStateChange;
     this.constructionTelemetry = this.buildLiveConstructionTelemetry();
+    this.loadBalanceTelemetryHistory();
+  }
+
+  public getBalanceTelemetryHistory(): AttemptBalanceTelemetry[] {
+    return this.attemptTelemetryHistory;
+  }
+
+  public clearBalanceTelemetryHistory(): void {
+    this.attemptTelemetryHistory = [];
+    this.currentAttemptTelemetry = null;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(SiegeController.TELEMETRY_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    this.onStateChange?.();
+  }
+
+  private loadBalanceTelemetryHistory(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const raw = localStorage.getItem(SiegeController.TELEMETRY_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        this.attemptTelemetryHistory = parsed.slice(-SiegeController.MAX_TELEMETRY_HISTORY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  private saveBalanceTelemetryHistory(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      if (this.attemptTelemetryHistory.length > SiegeController.MAX_TELEMETRY_HISTORY) {
+        this.attemptTelemetryHistory = this.attemptTelemetryHistory.slice(
+          -SiegeController.MAX_TELEMETRY_HISTORY,
+        );
+      }
+      localStorage.setItem(
+        SiegeController.TELEMETRY_STORAGE_KEY,
+        JSON.stringify(this.attemptTelemetryHistory),
+      );
+    } catch {
+      // Ignore storage errors
+    }
   }
 
   public buildLiveConstructionTelemetry(customState?: LevelState): ConstructionRelevanceTelemetry {
@@ -151,9 +213,11 @@ export class SiegeController {
       this.store.wispPlacementPhase === 'PRE_SIEGE_REVIEW' ||
       this.store.wispsRequiredBeforeSiege;
     if (requiresWispPlacement && !this.store.areAllWispsPlacedAndValid()) {
+      const reqCount = this.store.getRequiredWispCount();
+      const countWord = formatWispCountWord(reqCount);
       return {
         allowed: false,
-        reason: 'Place all five wisps in valid sanctuary space before beginning the siege.',
+        reason: `Place all ${countWord} ${reqCount === 1 ? 'wisp' : 'wisps'} before the siege.`,
         checklist,
       };
     }
@@ -277,8 +341,9 @@ export class SiegeController {
   public enterPreSiegeReview(): boolean {
     const ok = this.store.enterPreSiegeReview();
     if (!ok) {
-      this.tutorialGateWarning =
-        'Place all five wisps in valid sanctuary space before entering Pre-Siege Review.';
+      const reqCount = this.store.getRequiredWispCount();
+      const countWord = formatWispCountWord(reqCount);
+      this.tutorialGateWarning = `Place all ${countWord} ${reqCount === 1 ? 'wisp' : 'wisps'} before the siege.`;
       this.onStateChange?.();
       return false;
     }
@@ -476,6 +541,67 @@ export class SiegeController {
 
     // 6. Compute deterministic target selection and ballistic trajectory for Attack 1
     this.computeCurrentAttackTargeting(state);
+
+    // 7. Initialize Observational Balance Telemetry for this attempt
+    const byMaterial: Record<MaterialType, number> = {
+      wood_beam: 0,
+      wood_block: 0,
+      stone_block: 0,
+      bullseye_block: 0,
+    };
+    for (const p of playerPieces) {
+      byMaterial[p.type] = (byMaterial[p.type] || 0) + 1;
+    }
+    const jointsByType: Record<string, number> = {};
+    for (const j of state.joints ?? []) {
+      jointsByType[j.jointType] = (jointsByType[j.jointType] || 0) + 1;
+    }
+    const wispPlacedPositions: Record<string, Vector2> = {};
+    const wispProtectionClassification: Record<string, WispShelterStatus> = {};
+    let sharedClusterWisps = 0;
+    let heavyOverheadRiskCount = 0;
+    for (const w of state.wisps) {
+      wispPlacedPositions[w.id] = { ...w.position };
+      wispProtectionClassification[w.id] = w.shelterStatus ?? 'Exposed';
+      if (w.sharedCollapseRisk) sharedClusterWisps++;
+      if (w.heavyOverheadHazard) heavyOverheadRiskCount++;
+    }
+    this.preReinforcementPieceCount = state.pieces.length;
+    this.preReinforcementJointCount = (state.joints ?? []).length;
+
+    this.currentAttemptTelemetry = {
+      attemptId: `attempt_${Date.now()}_${this.attemptTelemetryHistory.length + 1}`,
+      timestamp: Date.now(),
+      levelId: state.levelId,
+      activeWispCount: state.wisps.length,
+      activeWispIds: state.wisps.map((w) => w.id),
+      developerWispCountOverride: this.store.developerWispCountOverride,
+      initialPieceCount: state.pieces.length,
+      initialPlayerPiecesByMaterial: byMaterial,
+      initialJointCountByType: jointsByType,
+      wispPlacedPositions,
+      wispProtectionClassification,
+      sharedCollapseRiskClusters: sharedClusterWisps > 0 ? 1 : 0,
+      heavyOverheadRiskCount,
+      attack1TargetId: this.currentTarget?.id ?? null,
+      attack1TargetCategory: this.currentTarget?.type ?? null,
+      attack1FirstImpactId: null,
+      wispsStableAfterAttack1: state.wisps.length,
+      wispsDispersedAfterAttack1: 0,
+      reinforcementPiecesPlaced: 0,
+      reinforcementJointsCreated: 0,
+      reserveUsedCount: 0,
+      guaranteedDeliveryUsed: false,
+      bullseyeUsed: state.pieces.some((p) => p.type === 'bullseye_block'),
+      attack2TargetId: null,
+      attack2TargetCategory: null,
+      attack2FirstImpactId: null,
+      finalWispsStable: state.wisps.length,
+      finalWispsDispersed: 0,
+      finalResultBand: 'Defense Failed',
+      completionAwarded: false,
+      attacks: [],
+    };
 
     this.introTimer = 0;
     this.mode = 'ENEMY_INTRODUCTION';
@@ -956,6 +1082,55 @@ export class SiegeController {
     };
     this.outcomes.push(outcome);
 
+    // Record Per-Attack Observational Balance Telemetry
+    if (this.currentAttemptTelemetry) {
+      const intactNow = state.pieces.length - cracked - broken - lost;
+      const jointsNow = state.joints ?? [];
+      const activeJointsNow = jointsNow.filter((j) => j.state !== 'BROKEN').length;
+      const brokenJointsNow = jointsNow.filter((j) => j.state === 'BROKEN').length;
+      const contactEvents = this.physicsBridge.getWispContactEvents();
+      const dispersalCauses: Record<string, string> = {};
+      for (const ev of contactEvents) {
+        if (ev.dispersalCommitted) {
+          dispersalCauses[ev.wispId] = `${ev.category}:${ev.contactingObjectId}`;
+        }
+      }
+      const firstImpactObj = this.physicsBridge.diagnostics.firstImpactTargetLabel || null;
+      const attackTel: AttackBalanceTelemetry = {
+        attackId: this.currentAttack.attackId,
+        attackerType: this.currentAttack.attackerType,
+        selectedTargetId: this.currentTarget?.id ?? 'none',
+        selectedTargetCategory: this.currentTarget?.type ?? 'none',
+        bullseyeOverrideActive: Boolean(this.targetingDiagnostics?.bullseyeOverrideSelected),
+        launchAngle: this.currentTrajectorySolution?.launchAngleDeg ?? 0,
+        launchSpeed: this.currentTrajectorySolution?.launchSpeed ?? 0,
+        firstImpactObjectId: firstImpactObj,
+        wispsRemainingAfterAttack: stableNow,
+        wispContactEventsCount: contactEvents.length,
+        wispDispersalCauses: dispersalCauses,
+        intactPiecesRemaining: intactNow,
+        crackedPiecesRemaining: cracked,
+        brokenPiecesRemaining: broken,
+        lostPiecesRemaining: lost,
+        activeJointsRemaining: activeJointsNow,
+        brokenJointsCount: brokenJointsNow,
+      };
+      this.currentAttemptTelemetry.attacks.push(attackTel);
+      if (this.currentAttackIndex === 0) {
+        this.currentAttemptTelemetry.attack1TargetId = this.currentTarget?.id ?? null;
+        this.currentAttemptTelemetry.attack1TargetCategory = this.currentTarget?.type ?? null;
+        this.currentAttemptTelemetry.attack1FirstImpactId = firstImpactObj;
+        this.currentAttemptTelemetry.wispsStableAfterAttack1 = stableNow;
+        this.currentAttemptTelemetry.wispsDispersedAfterAttack1 = dispersed;
+        this.preReinforcementPieceCount = state.pieces.length;
+        this.preReinforcementJointCount = (state.joints ?? []).length;
+      } else if (this.currentAttackIndex === 1) {
+        this.currentAttemptTelemetry.attack2TargetId = this.currentTarget?.id ?? null;
+        this.currentAttemptTelemetry.attack2TargetCategory = this.currentTarget?.type ?? null;
+        this.currentAttemptTelemetry.attack2FirstImpactId = firstImpactObj;
+      }
+    }
+
     this.intermissionTimer = 0;
     this.mode = 'ATTACK_RESOLVED';
     this.store.setSavedPhase('ATTACK_RESOLVED');
@@ -980,7 +1155,7 @@ export class SiegeController {
     }
   }
 
-  private finishSequence(): void {
+  public finishSequence(): void {
     const state = this.store.getState();
     let intact = 0;
     let cracked = 0;
@@ -994,12 +1169,13 @@ export class SiegeController {
       else intact++;
     }
 
+    const totalWisps = state.wisps.length;
     const stableWisps = state.wisps.filter((w) => !w.isDispersed).length;
-    const dispersedWisps = state.wisps.length - stableWisps;
+    const dispersedWisps = Math.max(0, totalWisps - stableWisps);
 
     this.siegeSummary = {
       wispsStable: stableWisps,
-      totalWisps: state.wisps.length,
+      totalWisps,
       piecesIntact: intact,
       piecesCracked: cracked,
       piecesBroken: broken,
@@ -1008,7 +1184,7 @@ export class SiegeController {
       outcomes: [...this.outcomes],
     };
 
-    // Compute Phase 3 Level 1 Results & Mastery Evaluation
+    // Compute Level 1 Results & Mastery Evaluation using authoritative LevelConfiguration
     this.level1Results = this.computeLevel1Results(
       state,
       stableWisps,
@@ -1020,6 +1196,7 @@ export class SiegeController {
     );
     this.store.lastResults = this.level1Results;
     this.store.saveNamedSnapshot('FINAL_RESULT');
+    this.store.recordAttemptCompleted(this.level1Results);
 
     this.mode = 'SEQUENCE_COMPLETE';
     this.store.setSavedPhase('RESULTS');
@@ -1027,37 +1204,51 @@ export class SiegeController {
     this.onStateChange?.();
   }
 
-  private computeLevel1Results(
-    state: LevelState,
-    wispsStable: number,
-    wispsDispersed: number,
-    piecesIntact: number,
-    piecesCracked: number,
-    piecesBroken: number,
-    piecesLost: number,
+  public computeLevel1Results(
+    state: LevelState = this.store.getState(),
+    wispsStable: number = state.wisps.filter((w) => !w.isDispersed).length,
+    wispsDispersed: number = this.store.getRequiredWispCount(state) -
+      state.wisps.filter((w) => !w.isDispersed).length,
+    piecesIntact: number = state.pieces.filter((p) => !p.condition || p.condition === 'INTACT').length,
+    piecesCracked: number = state.pieces.filter((p) => p.condition === 'CRACKED').length,
+    piecesBroken: number = state.pieces.filter((p) => p.condition === 'BROKEN').length,
+    piecesLost: number = state.pieces.filter((p) => p.condition === 'LOST').length,
   ): Level1Results {
+    const requiredCount = this.store.getRequiredWispCount(state);
+    const minStableForCompletion = this.store.getMinimumStableWispsForCompletion(state);
+    const resultBands = this.store.getResultBands(state);
     const survived = wispsStable >= 1;
+
     let classification: ResultClassification = 'Defense Failed';
-    if (wispsStable >= 5) {
-      classification = 'Exceptional Defense';
-    } else if (wispsStable === 4) {
-      classification = 'Strong Defense';
-    } else if (wispsStable === 3) {
-      classification = 'Successful Defense';
-    } else if (wispsStable >= 1) {
-      classification = 'Narrow Survival';
+    for (const band of resultBands) {
+      if (wispsStable >= band.minStableWisps && wispsStable <= band.maxStableWisps) {
+        classification = band.classification;
+        break;
+      }
     }
 
     const checklistAtStart = this.constructionTelemetry.tutorialChecklistStatus;
+    const isChecklistComplete =
+      checklistAtStart.isComplete || this.store.getTutorialChecklist().isComplete;
     const tutorialCompletionAwarded =
-      checklistAtStart.isComplete &&
+      isChecklistComplete &&
       !this.devBypassTutorialRequirements &&
-      wispsStable >= 3;
+      wispsStable >= minStableForCompletion;
 
     this.constructionTelemetry.wispsAfterAttack2 = wispsStable;
     this.constructionTelemetry.finalResultBand = classification;
     this.constructionTelemetry.tutorialCompletionAwarded = tutorialCompletionAwarded;
     this.constructionTelemetry.noBuildDevBypassUsed = this.devBypassTutorialRequirements;
+
+    const countWord = formatWispCountWord(requiredCount);
+    const wispMasteryDescription =
+      requiredCount === 3
+        ? 'Keep all three wisps stable.'
+        : requiredCount >= 5
+          ? 'Keep at least 4 of 5 elemental wisps safe and stable.'
+          : `Keep all ${countWord} ${requiredCount === 1 ? 'wisp' : 'wisps'} stable.`;
+    const wispMasteryAchieved =
+      requiredCount >= 5 ? wispsStable >= 4 : wispsStable >= requiredCount;
 
     const masteryCriteria: MasteryCriterion[] = [
       {
@@ -1069,8 +1260,8 @@ export class SiegeController {
       {
         id: 'WISP_MASTERY',
         label: 'Chorus Preserved',
-        description: 'Keep at least 4 of 5 elemental wisps safe and stable.',
-        achieved: wispsStable >= 4,
+        description: wispMasteryDescription,
+        achieved: wispMasteryAchieved,
       },
       {
         id: 'STRUCTURAL_MASTERY',
@@ -1091,8 +1282,8 @@ export class SiegeController {
         failureObservation =
           'Incoming projectiles breached the upper western flank and struck the exposed wisps. Span a Timber Beam overhead and brace the front wall before Attack 2.';
       }
-    } else if (wispsStable < 3) {
-      failureObservation = `Narrow Survival: Only ${wispsStable} of 5 wisps held. Span a Timber Beam across the upper stone columns and brace the western flank with stone blocks to shield at least 3 wisps and complete Level 1.`;
+    } else if (wispsStable < minStableForCompletion) {
+      failureObservation = `Narrow Survival: Only ${wispsStable} of ${requiredCount} wisps held. Span a Timber Beam across the upper stone columns and brace the western flank with stone blocks to shield at least ${minStableForCompletion} wisps and complete Level 1.`;
     } else if (!tutorialCompletionAwarded) {
       failureObservation =
         'Complete the basic shelter checklist (place a beam, place a block, create a supported connection, and test stability) without developer bypass to earn Level 1 Tutorial Completion.';
@@ -1106,9 +1297,9 @@ export class SiegeController {
       !this.wasStartedViaPlayerGate &&
       !this.devBypassTutorialRequirements &&
       this.constructionTelemetry.playerPiecesPlacedBeforeAttack1 > 0 &&
-      wispsStable >= 3
+      wispsStable >= minStableForCompletion
     ) {
-      // Headless automated test runs that placed player pieces and achieved >= 3 wisps without player UI gate
+      // Headless automated test runs that placed player pieces and achieved >= minStableForCompletion wisps without player UI gate
       this.store.markTutorialCompleted();
       sampleUnlockGranted = this.store.grantSampleUnlock();
     }
@@ -1137,6 +1328,24 @@ export class SiegeController {
     const jointsStrained = joints.filter((j) => j.state === 'STRAINED').length;
     const jointsBroken = joints.filter((j) => j.state === 'BROKEN').length;
 
+    // Finalize Observational Balance Telemetry for this attempt
+    if (this.currentAttemptTelemetry) {
+      this.currentAttemptTelemetry.reinforcementPiecesPlaced = this.store.reinforcementMaterialsUsed;
+      this.currentAttemptTelemetry.reinforcementJointsCreated = Math.max(
+        0,
+        joints.length - this.preReinforcementJointCount,
+      );
+      this.currentAttemptTelemetry.reserveUsedCount = this.store.reinforcementMaterialsUsed;
+      this.currentAttemptTelemetry.guaranteedDeliveryUsed = this.store.guaranteedDeliveryUsed > 0;
+      this.currentAttemptTelemetry.bullseyeUsed = bullseyeUsed;
+      this.currentAttemptTelemetry.finalWispsStable = wispsStable;
+      this.currentAttemptTelemetry.finalWispsDispersed = wispsDispersed;
+      this.currentAttemptTelemetry.finalResultBand = classification;
+      this.currentAttemptTelemetry.completionAwarded = tutorialCompletionAwarded;
+      this.attemptTelemetryHistory.push(this.currentAttemptTelemetry);
+      this.saveBalanceTelemetryHistory();
+    }
+
     return {
       survived,
       tutorialCompletionAwarded,
@@ -1144,6 +1353,9 @@ export class SiegeController {
       wispsStable,
       wispsDispersed,
       totalWisps: state.wisps.length,
+      requiredWispCount: requiredCount,
+      minimumStableWispsForCompletion: minStableForCompletion,
+      developerWispCountOverride: this.store.developerWispCountOverride,
       piecesIntact,
       piecesCracked,
       piecesBroken,
@@ -1224,13 +1436,13 @@ export class SiegeController {
     this.onStateChange?.();
   }
 
-  public startOver(): void {
+  public resetLevel(): void {
     this.mode = 'FRESH_START_RESTORING';
     if (this.physicsBridge) {
       this.physicsBridge.teardown();
       this.physicsBridge = null;
     }
-    this.store.resetToDefault();
+    this.store.resetLevel();
     this.mode = 'CONSTRUCTION';
     this.currentAttack = null;
     this.currentAttackIndex = 0;
@@ -1245,9 +1457,14 @@ export class SiegeController {
     this.tutorialGateWarning = null;
     this.checklistHighlightActive = false;
     this.wasStartedViaPlayerGate = false;
+    this.emergencyStopUsed = false;
     this.constructionTelemetry = this.buildLiveConstructionTelemetry();
     soundSynth.playSnap();
     this.onStateChange?.();
+  }
+
+  public startOver(): void {
+    this.resetLevel();
   }
 
   public restoreDesign(): void {
@@ -1468,6 +1685,18 @@ export class SiegeController {
 
     if (result.recoveredPhase === 'CONSTRUCTION_READY' || result.recoveredPhase === 'INITIAL_CONSTRUCTION') {
       this.mode = 'CONSTRUCTION';
+      this.currentAttack = null;
+      this.currentAttackIndex = 0;
+      this.outcomes = [];
+      this.siegeSummary = null;
+      this.level1Results = null;
+      this.currentTarget = null;
+      this.currentTrajectorySolution = null;
+      this.targetingDiagnostics = null;
+      this.targetingFailureReason = null;
+      this.bullseyeNotice = null;
+      this.emergencyStopUsed = false;
+      this.constructionTelemetry = this.buildLiveConstructionTelemetry();
     } else if (result.recoveredPhase === 'SETTLED') {
       this.mode = 'SETTLED';
     } else if (result.recoveredPhase === 'PLACE_WISPS') {

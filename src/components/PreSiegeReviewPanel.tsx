@@ -55,7 +55,7 @@ export const PreSiegeReviewPanel: React.FC<PreSiegeReviewPanelProps> = ({
             </h2>
           </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            Review your five wisp positions, incoming attack order, and reserve supplies before locking the siege.
+            Review your {wisps.length === 3 ? 'three' : wisps.length} wisp positions, incoming attack order, and reserve supplies before locking the siege.
           </p>
         </div>
 
@@ -88,11 +88,11 @@ export const PreSiegeReviewPanel: React.FC<PreSiegeReviewPanelProps> = ({
 
       {/* Summary Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-        {/* 1. Five Wisp Positions & Protection Status */}
+        {/* 1. Active Wisp Positions & Protection Status */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
           <div className="flex items-center gap-1.5 text-teal-300 font-bold mb-1.5">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Wisp Sanctuary Positions (5/5)</span>
+            <span>Wisp Sanctuary Positions ({wisps.length}/{wisps.length})</span>
           </div>
           <div className="space-y-1">
             {wisps.map((w) => (

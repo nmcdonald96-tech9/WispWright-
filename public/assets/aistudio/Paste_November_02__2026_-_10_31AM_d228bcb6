@@ -1,0 +1,1158 @@
+INTUITIVE JOINT EDITING AND ANGLED TIMBER CONSTRUCTION
+
+The project currently has an accepted mobile fortress-construction, wisp-placement,
+siege, reinforcement, targeting, presentation, and persistence foundation.
+
+This task focuses exclusively on improving the central construction experience.
+
+Do not add new projectiles, materials, levels, progression, monetization,
+environmental mechanics, Bullseye variants, wind devices, or visual fortress
+transformation.
+
+PRODUCT GOAL
+
+Fortress construction must feel quick, permissive, and intelligent.
+
+The player should be able to create:
+
+- Long timber spans
+- Vertical posts
+- Horizontal roofs
+- Peaked roofs
+- Angled rafters
+- Diagonal braces
+- T-shaped frames
+- Triangular supports
+- Enclosed wisp chambers
+
+without fighting joint-management controls or requiring pixel-perfect placement.
+
+The builder should infer ordinary structural intent while remaining predictable.
+
+CURRENT ACCEPTED BEHAVIOR
+
+Preserve the accepted behavior of:
+
+- Inventory-to-world dragging
+- Tap-to-place accessibility mode
+- Inventory accounting
+- Manual rotation ownership
+- Rotation collision and sweep validation
+- Timber Beam endpoint sockets
+- Existing end-to-end Timber Joints
+- Joint strain and breakage
+- Supported contact
+- Environmental anchors
+- Construction revisions
+- Stability testing
+- Build phase without wisps
+- Post-construction wisp placement
+- Enclosed wisp chambers
+- Wisp collision and debris-contact rules
+- Projectile targeting and ballistics
+- Reinforcement
+- Bullseye Block behavior
+- Tactical, Follow, and experimental POV cameras
+- Results
+- Retry Design
+- Start Over
+- Snapshot hierarchy
+- Local persistence
+- Reload recovery
+- Existing automated regression tests
+
+Do not change:
+
+- Global material durability
+- Projectile mass or velocity
+- Wisp dispersal thresholds
+- Level 1 inventory
+- Attack definitions
+- Result bands
+- Joint strength merely to hide geometric or editing defects
+
+CONFIRMED USABILITY PROBLEM
+
+Two Timber Beams can now connect end-to-end, and a contextual “Detach Joint”
+action appears.
+
+However, the player must manually select Detach Joint before adjusting a connected
+piece.
+
+This is technically explicit but irritating during ordinary construction.
+
+Everyday editing should not require the player to manage joint metadata manually.
+
+The player should be able to:
+
+1. Select a connected beam.
+2. Drag or rotate it.
+3. Have affected editable joints temporarily released for the active edit.
+4. Preview new compatible connections.
+5. Release to commit the new transform and joint arrangement.
+6. Cancel to restore the exact original transform and joint graph.
+
+“Detach Joint” may remain as an optional advanced command, but it must not be
+required for ordinary repositioning.
+
+ANGLED-CONSTRUCTION PROBLEM
+
+A Timber Beam may be rotated to 45 degrees, but angled construction still lacks
+sufficiently intelligent connection behavior.
+
+The system must support:
+
+- Angled beam endpoint to horizontal flat face
+- Angled beam endpoint to vertical flat face
+- Angled beam endpoint to block corner
+- Angled beam endpoint to another angled beam endpoint
+- Opposing angled beams forming a roof peak
+- Diagonal beam bracing a vertical and horizontal frame
+- Intentional T-shaped timber joints
+
+The piece faces should align cleanly and uniformly.
+
+The builder must not force every fortress into rectangular, blocky arrangements.
+
+PRIMARY OBJECTIVES
+
+1. Remove mandatory manual detachment from ordinary connected-piece editing.
+2. Implement transactional automatic joint suspension and reconnection.
+3. Support flush angled-beam-to-flat-face connections.
+4. Support recognized roof-peak joints between opposing angled beams.
+5. Support diagonal-brace framing.
+6. Support intentional T-joints where geometry is compatible.
+7. Preserve manual rotation ownership.
+8. Prevent overlap, rotational tunneling, joint stretching, and duplicate
+   constraints.
+9. Make mobile construction fast and predictable.
+10. Preserve the distinction among contact, alignment, and structural joints.
+
+OUT OF SCOPE
+
+Do not implement:
+
+- Magical fortress visual transformation
+- New construction materials
+- Metal brackets
+- Rope
+- Repair
+- Joint-strength upgrades
+- Faction-specific joinery
+- Automatic fortress generation
+- New gameplay levels
+- New projectile types
+- Wind machine
+- Enhancement slots
+- Additional Taunt mechanics
+- Multiplayer
+- Advertising
+- Final character art
+
+CONNECTION TAXONOMY
+
+Maintain explicit connection categories.
+
+1. FREE CONTACT
+
+- Pieces physically touch.
+- Collision and friction apply.
+- No constraint exists.
+- Pieces may separate naturally.
+
+2. SUPPORTED CONTACT
+
+- A piece rests on a valid supporting face.
+- May satisfy support/tutorial requirements.
+- No rigid or breakable structural joint is automatically created.
+- The piece may slide, tip, or fall if support moves.
+
+3. POSITIONAL SNAP
+
+- Aligns compatible points or faces.
+- Helps placement.
+- Does not itself create a physical constraint.
+- Preserves the player’s manually selected angle where possible.
+
+4. TIMBER SPLICE JOINT
+
+- Connects approximately collinear Timber Beam endpoints.
+- Useful to extend a beam or post.
+- Breakable and compliant.
+- Relatively weak under unsupported bending.
+- Uses the existing breakable Timber Joint foundation.
+
+5. TIMBER FACE JOINT
+
+- Connects a beam endpoint flush to a compatible wooden face, edge, or
+  joint-capable socket.
+- Supports rafters, braces, and framing.
+- Breakable and compliant.
+- Must be intentional and visually previewed.
+
+6. ROOF PEAK JOINT
+
+- Connects two opposed angled beam endpoints at a roof apex.
+- Recognizes compatible opposing slopes.
+- Better resists ordinary compressive roof loading than a simple collinear
+  unsupported splice.
+- Remains vulnerable to spreading supports, tension, shear, direct impact, and
+  loss of lower support.
+- Does not make the roof peak indestructible.
+
+7. DIAGONAL BRACE JOINT
+
+- Connects a diagonal beam between compatible frame faces or sockets.
+- Improves resistance to lateral deformation.
+- Remains breakable.
+- Requires valid geometry and support.
+
+8. T-JOINT
+
+- Connects one Timber Beam endpoint to a compatible joint-capable side socket
+  on another Timber Beam.
+- Must not be created from arbitrary side contact.
+- Must be intentionally previewed and accepted.
+
+9. ENVIRONMENTAL ANCHOR
+
+- Uses the existing map-anchor rules.
+- Remains visually and logically distinct.
+- Usually stronger than an ordinary timber joint.
+
+Do not collapse these categories into one generic “connected” Boolean.
+
+CONNECTION STRENGTH PROFILES
+
+Keep joint-strength profiles centralized and tunable.
+
+At minimum, provide profiles for:
+
+- TIMBER_SPLICE
+- TIMBER_FACE
+- ROOF_PEAK
+- DIAGONAL_BRACE
+- TIMBER_T_JOINT
+- ENVIRONMENTAL_ANCHOR, using the existing profile
+
+Each profile may define:
+
+- Tensile strength
+- Shear strength
+- Bending strength
+- Torque limit
+- Linear compliance
+- Angular compliance
+- Damping
+- Strain threshold
+- Break threshold
+
+Do not distribute these constants across UI and physics files.
+
+Do not tune them to guarantee that a specific Level 1 structure survives.
+
+Strength must arise from the joint profile plus the structure’s geometry and
+support.
+
+AUTOMATIC JOINT-EDIT MODE
+
+When the player begins dragging or rotating a connected piece during BUILD:
+
+1. Capture an exact edit-start snapshot containing:
+   - Piece transform
+   - Piece condition
+   - All affected logical joints
+   - Joint socket pairs
+   - Joint strength profiles
+   - Neighbor piece IDs
+   - Construction revision
+   - Relevant inventory state
+
+2. Enter JOINT_EDIT_PREVIEW.
+
+3. Temporarily suspend only the selected piece’s editable joints in the preview
+   layer.
+
+4. Do not immediately delete the authoritative joints.
+
+5. Keep neighboring pieces stationary.
+
+6. Allow the selected piece to move and rotate normally.
+
+7. Evaluate collisions continuously.
+
+8. Preview compatible existing and new joints.
+
+9. On valid release:
+   - Commit the new piece transform.
+   - Remove obsolete joints once.
+   - Preserve still-compatible joints when geometrically valid.
+   - Create newly accepted joints once.
+   - Increment construction revision once.
+   - Create one atomic undo operation.
+
+10. On cancel or invalid release:
+   - Restore the exact original transform.
+   - Restore the exact original joint graph.
+   - Add no history operation.
+   - Do not change revision.
+
+The player must never have to press Detach Joint merely to begin this normal edit.
+
+EDIT INTENT
+
+Use interaction intent to prevent accidental joint destruction.
+
+A very small movement or tap:
+
+- Selects the piece.
+- Does not suspend or remove joints.
+
+A meaningful drag:
+
+- Enters joint-edit preview.
+
+Manual rotation:
+
+- Enters joint-edit preview for joints affected by the proposed rotation.
+
+Closing the selection toolbar without editing:
+
+- Leaves all joints unchanged.
+
+Deleting a piece:
+
+- Uses the existing explicit deletion behavior and removes associated joints
+  exactly once.
+
+OPTIONAL DETACH JOINT
+
+Retain Detach Joint as an advanced contextual action.
+
+Use cases:
+
+- Remove a joint while retaining the same piece position.
+- Convert a joint to ordinary contact.
+- Detach one particular joint while preserving another.
+- Prepare a piece to fall freely during stability testing.
+
+Requirements:
+
+- Identify the selected joint clearly.
+- If several joints exist, allow selecting the intended joint.
+- Detachment is undoable.
+- Detachment does not move the pieces.
+- Detachment does not return inventory.
+- Detachment is not required for ordinary drag or rotation.
+
+MOBILE QUICK-EDIT EXPERIENCE
+
+On a phone:
+
+- Tap selects.
+- Drag moves, including connected pieces.
+- Rotation controls update the preview.
+- Compatible new joints appear while editing.
+- Release commits.
+- Cancel restores.
+- No multi-step detach-dialog-confirm-move workflow is required.
+
+The selected-piece toolbar should prioritize:
+
+- Rotate -45
+- Rotate -15
+- Rotate +15
+- Rotate +45
+- Cancel current edit when active
+- Delete
+
+Place advanced Detach Joint in a secondary context menu or compact connection
+inspector.
+
+Do not allow the toolbar to cover active connection previews.
+
+FACE-BASED SNAP GEOMETRY
+
+Extend Timber Beam connection geometry beyond endpoint points.
+
+Each Timber Beam should expose local-space geometry including:
+
+- END_A_CENTER
+- END_B_CENTER
+- END_A_FACE
+- END_B_FACE
+- TOP_FACE
+- BOTTOM_FACE
+- SIDE_A_FACE
+- SIDE_B_FACE
+- Optional joint-capable side sockets
+- Local longitudinal axis
+- Local face normals
+
+Blocks should expose compatible:
+
+- Top face
+- Bottom face
+- Left face
+- Right face
+- Corners or edge endpoints where useful
+- Joint-capable surfaces where permitted
+
+Transform all geometry through authoritative world position and rotation.
+
+Do not define angled behavior through screen coordinates or special-case 45
+degrees only.
+
+The system should work across supported angle increments.
+
+FLUSH ANGLED-BEAM-TO-FLAT-FACE CONNECTION
+
+When an angled beam endpoint approaches a compatible flat face:
+
+1. Identify the beam endpoint face.
+2. Identify the target face and normal.
+3. Calculate the transform that places the beam endpoint flush against the target
+   face.
+4. Preserve the player-selected beam angle.
+5. Avoid penetration.
+6. Avoid visible gaps beyond documented tolerance.
+7. Show a FACE JOINT preview.
+8. Commit the appropriate breakable joint on valid release.
+
+Examples:
+
+- 45-degree rafter meeting the top of a wall block
+- 45-degree brace meeting the side of a vertical post
+- Angled beam meeting a horizontal roof beam
+- Angled beam meeting a stone or wood support face when the material rules permit
+  attachment
+
+For this milestone, Timber Beam endpoints may attach structurally to:
+
+- Timber Beam joint-capable faces
+- Wood Block faces
+- Existing timber-compatible framing sockets
+
+A Timber Beam resting on stone may remain supported contact unless the current
+game explicitly supports timber-to-stone attachment.
+
+Do not create invisible adhesive on arbitrary stone surfaces without a defined
+connection rule.
+
+FACE ALIGNMENT TOLERANCE
+
+Use socket/face-specific tolerances.
+
+Permit:
+
+- Boundary contact
+- Small visual seam
+- Small documented numerical clearance
+
+Reject:
+
+- Collider interior penetration
+- Beam body crossing the target body
+- Attachment where the remaining beam intersects another piece
+- Attachment outside the build zone
+- Attachment through terrain
+
+Do not broadly shrink colliders.
+
+ROOF PEAK RECOGNITION
+
+Recognize a roof-peak candidate when:
+
+- Two Timber Beam endpoints approach one another.
+- The beam slopes are opposed.
+- Their endpoint faces can meet without material overlap.
+- Their longitudinal axes create a plausible peak angle.
+- Neither beam penetrates the other.
+- The player intentionally releases within the peak snap range.
+
+Do not require exactly +45 and -45 degrees.
+
+Support a documented range of opposing roof slopes, such as:
+
+- Approximately 25 to 65 degrees on each side
+- Compatible included peak angle
+- Stable endpoint-face alignment
+
+Use world-space geometry rather than hardcoded angle labels.
+
+ROOF PEAK PRESENTATION
+
+During preview:
+
+- Highlight both endpoint faces.
+- Show “Roof Peak Joint.”
+- Preview a small connector, binding, cap, or joinery symbol.
+- Show whether lower supports are currently detected.
+- Do not promise stability.
+
+After placement:
+
+- Preserve both manual angles.
+- Create one logical Roof Peak Joint.
+- Do not add duplicate ordinary endpoint joints at the same socket pair.
+
+ROOF PEAK PHYSICS
+
+The Roof Peak Joint should:
+
+- Keep the apex together under ordinary supported roof load.
+- Permit small realistic compliance.
+- Transfer force between the rafters.
+- Benefit structurally when lower beam ends are supported.
+- Become vulnerable when lower supports spread.
+- Be vulnerable to direct projectile impact.
+- Be vulnerable to asymmetric roof collapse.
+- Break independently from either beam where appropriate.
+
+Do not make Roof Peak inherently stronger in every force direction.
+
+Recommended relative behavior:
+
+- Better than an ordinary collinear splice under roof compression.
+- Not necessarily better under tension or sideways shear.
+- Worse when the lower supports are absent or moving outward.
+
+If the existing physics engine cannot model directional strength directly,
+approximate it with centralized, documented joint limits and geometry-aware
+stress evaluation.
+
+Do not use a hidden invulnerability multiplier.
+
+DIAGONAL BRACE CONNECTION
+
+Recognize a brace candidate when an angled Timber Beam meaningfully connects:
+
+- A vertical post to a horizontal beam
+- A post to a block-supported frame
+- Two compatible frame members
+
+A valid brace should create intentional joints at one or both endpoints.
+
+If only one endpoint is connected:
+
+- The remaining endpoint behaves according to contact or free physics.
+
+If both endpoints are connected:
+
+- The brace may resist lateral deformation.
+- It must remain breakable.
+- It must not lock the whole construction into a fully rigid body.
+
+Show “Brace Joint” during preview where appropriate.
+
+Do not automatically classify every angled beam as a brace.
+
+T-JOINT SUPPORT
+
+Provide intentional endpoint-to-side joining for Timber Beams.
+
+A T-joint requires:
+
+- Moving beam endpoint
+- Compatible target side socket or joint-capable face
+- Valid geometric alignment
+- No material overlap
+- Deliberate release while the preview is active
+
+A T-joint must not be created merely because a beam endpoint touches any point
+along another beam.
+
+Use discrete, visible joint-capable side locations or a well-defined continuous
+face rule.
+
+Prefer a small number of predictable side sockets for the initial implementation.
+
+JOINT GRAPH OWNERSHIP
+
+Maintain one authoritative logical joint graph.
+
+Requirements:
+
+- Stable joint IDs
+- One joint per accepted socket pair
+- No duplicate constraints
+- No UI component owns authoritative joints
+- Physics constraints derive from the logical graph
+- Construction preview uses a transaction overlay
+- Persistence stores logical joints, not physics-engine constraint objects
+- Snapshot restore rebuilds constraints exactly once
+- Replay does not create authoritative joints
+
+JOINT COMPATIBILITY AFTER EDIT
+
+When the selected piece is released:
+
+For each original joint:
+
+- If the socket relationship remains geometrically compatible, preserve the
+  joint ID and profile where appropriate.
+- If it becomes incompatible, remove it.
+- If the connection type changes, replace it atomically with a new joint type.
+- Do not stretch a joint beyond valid tolerances.
+- Do not leave stale references.
+
+For each new previewed joint:
+
+- Validate final geometry.
+- Reject duplicate socket ownership when a socket allows only one joint.
+- Create one logical joint.
+
+If release is invalid:
+
+- Restore all original joints.
+
+MULTI-JOINT PIECES
+
+A Timber Beam may have more than one connection.
+
+Examples:
+
+- A rafter with a wall-face joint at its lower end and Roof Peak Joint at its
+  upper end
+- A diagonal brace connected at both ends
+- A horizontal beam supported by two posts
+- A center beam with two connected extensions
+
+Editing such a beam:
+
+- Temporarily previews all affected relationships.
+- Keeps unaffected neighboring structures stationary.
+- Restores all original joints on cancel.
+- Atomically commits the final valid joint set on release.
+
+Do not require detaching each joint individually before movement.
+
+CONNECTION STRENGTH AND SUPPORT CONTEXT
+
+Do not decide stability solely from joint type.
+
+The effective structural outcome depends on:
+
+- Joint strength profile
+- Piece mass
+- Span length
+- Number and location of supports
+- Force direction
+- Torque
+- Load position
+- Impact severity
+- Neighboring joint state
+
+A peaked roof supported at both lower ends should perform better than two
+unsupported rafters joined in midair.
+
+An unsupported connected roof may:
+
+- Fall as a connected assembly
+- Pivot
+- Spread
+- Strain
+- Break at the peak
+- Break at a lower face joint
+
+Do not artificially suspend unsupported construction.
+
+CONSTRUCTION PREVIEW FEEDBACK
+
+Make the builder’s inferred intent visible.
+
+Use distinct preview labels and visuals for:
+
+- Position Snap
+- Supported Contact
+- Timber Splice
+- Timber Face Joint
+- Roof Peak Joint
+- Brace Joint
+- T-Joint
+- Environmental Anchor
+- Invalid overlap
+
+Show:
+
+- Source socket/face
+- Target socket/face
+- Proposed joint location
+- Proposed connection type
+
+Do not require the player to understand internal physics terminology.
+
+Player-facing labels may be concise:
+
+- “Aligned”
+- “Supported”
+- “Timber Joint”
+- “Roof Peak”
+- “Brace”
+- “Anchor”
+
+Developer Presentation may retain technical names.
+
+INTENT RANKING
+
+When several candidates are nearby, rank deterministically by:
+
+1. Valid geometry
+2. Manual rotation preservation
+3. Explicit endpoint/face compatibility
+4. Pointer proximity
+5. Minimal positional correction
+6. Minimal rotational correction
+7. Candidate appropriate to apparent structural context
+8. Stable ID tie-breaker
+
+Do not choose Roof Peak merely because two angled beams are close if their faces
+do not align.
+
+Do not choose ordinary contact when a clear deliberate compatible joint candidate
+is closer and visible.
+
+Allow the player to move away to reject a candidate.
+
+SNAP HYSTERESIS
+
+Use candidate locking/hysteresis to prevent flicker.
+
+Once a candidate is acquired:
+
+- Retain it within a larger release radius.
+- Do not jump rapidly between splice, face, and peak candidates.
+- Release only after clear movement away or invalid geometry.
+- Preserve selected rotation throughout.
+
+Do not make the snap feel sticky across large distances.
+
+COLLISION VALIDATION
+
+Every proposed edit remains subject to:
+
+- Full collider overlap validation
+- Swept movement/rotation validation where applicable
+- Terrain boundaries
+- Build-zone boundaries
+- Fixed geometry
+- Other construction pieces
+- Active wisps when editing during reinforcement
+- Existing connection constraints
+
+No joint type may authorize material overlap.
+
+At a valid shared connection plane:
+
+- Boundary contact is permitted.
+- Interior penetration is rejected.
+
+STABILITY TEST INTEGRATION
+
+When Test Stability begins:
+
+- Instantiate each logical joint exactly once.
+- Use the correct constraint behavior per joint type.
+- Initialize without penetration.
+- Reset stale forces and velocities as already accepted.
+- Allow joint compliance, strain, and failure.
+- Include meaningful joint motion in settlement detection.
+- Ignore tiny harmless flex for eventual sleep/settlement.
+
+After Restore Design:
+
+- Remove live constraints.
+- Restore logical joint definitions.
+- Rebuild subsequent test constraints exactly once.
+
+Repeated testing must not increase energy, joint counts, or body counts.
+
+JOINT FAILURE
+
+Preserve the existing joint states and extend them where needed:
+
+- INTACT
+- STRAINED
+- BROKEN
+
+Failure must:
+
+- Remove the relevant physics constraint once.
+- Preserve piece bodies.
+- Not automatically destroy either beam.
+- Record attack or load cause.
+- Remain broken during that siege/reinforcement attempt.
+- Not become repairable in this milestone.
+
+Different joint types may fail under different force directions.
+
+Keep formulas centralized and documented.
+
+REINFORCEMENT
+
+Use the same intuitive editing system during reinforcement.
+
+Requirements:
+
+- Intact connected pieces may be selected and moved through joint-edit preview.
+- Unchanged compatible joints may be preserved.
+- Incompatible joints are removed on valid release.
+- New joints may be created.
+- Broken joints remain broken.
+- Broken debris cannot create joints.
+- Manual movement and rotation cannot overlap surviving wisps.
+- Reinforcement history remains separate.
+- Cancel restores the reinforcement-entry relationship for that edit.
+
+Do not implement repair.
+
+UNDO AND REDO
+
+Treat one ordinary connected-piece edit as one atomic history operation containing:
+
+- Previous transform
+- New transform
+- Removed joints
+- Preserved joints
+- Created joints
+- Previous construction revision
+- New construction revision
+
+Undo must restore the exact previous transform and joint graph.
+
+Redo must:
+
+- Restore the accepted committed result
+- Avoid duplicate joints
+- Revalidate only where necessary for safe restoration
+- Never partially restore the operation
+
+Cancel and rejected edits create no history entry.
+
+Explicit Detach remains its own undoable operation.
+
+TUTORIAL AND DISCOVERY
+
+Do not burden Level 1’s initial guided tutorial with every connection type.
+
+The initial tutorial should continue teaching:
+
+- Beam
+- Block
+- Support
+- Stability
+
+Add optional contextual hints only when relevant:
+
+- First end-to-end splice:
+  “Connected beams can extend a span, but long unsupported roofs are weak.”
+
+- First angled face connection:
+  “Angled beams can brace walls and create sloped roofs.”
+
+- First roof peak:
+  “Supported rafters strengthen one another at the peak.”
+
+- First diagonal brace:
+  “Braces resist sideways collapse.”
+
+Each hint:
+
+- Appears once
+- Is skippable
+- Does not freeze construction unnecessarily
+- Does not prescribe an exact fortress
+
+PERSISTENCE AND SNAPSHOTS
+
+Persist:
+
+- Joint ID
+- Joint type
+- Piece IDs
+- Socket or face IDs
+- Local attachment parameters
+- Rest angle
+- Rest separation
+- Strength profile ID
+- Current logical state
+- Relevant metadata needed for reconstruction
+
+Do not persist:
+
+- Temporary edit suspension
+- Candidate previews
+- Pointer state
+- Ghost joints
+- Toolbar state
+- Raw physics constraints
+
+Reload during an active joint edit:
+
+- Cancel the preview.
+- Restore the last committed transform.
+- Restore the last committed logical joint graph.
+- Preserve inventory.
+- Create no history entry.
+
+Retry Design:
+
+- Restores submitted transforms and joints.
+
+Start Over:
+
+- Restores the original level structure and inventory.
+
+DEVELOPER DIAGNOSTICS
+
+Add or confirm:
+
+- Selected piece ID
+- Joint-edit preview active
+- Edit-start transform
+- Suspended preview joint IDs
+- Preserved joint candidates
+- Removed joint candidates
+- New joint candidates
+- Candidate type
+- Source face/socket
+- Target face/socket
+- Source face normal
+- Target face normal
+- Relative angle
+- Separation
+- Positional correction
+- Rotational correction
+- Connection-profile ID
+- Candidate-lock state
+- Joint graph before edit
+- Joint graph after proposed edit
+- Edit accepted/rejected/canceled
+- Active logical joint count
+- Active physics constraint count
+- Duplicate constraint warning
+- Per-joint stress values
+- Joint failure reason
+- History operation ID
+- Restore reason
+
+Diagnostics must not control the builder.
+
+AUTOMATED TESTS
+
+Add targeted tests for:
+
+1. Moving an endpoint-connected beam without manually detaching
+2. Cancel restoring the exact original joint
+3. Releasing away from the old joint leaves the piece detached
+4. Releasing near a new compatible endpoint creates one new joint
+5. Undo restores the previous joint graph
+6. Redo restores the new graph without duplication
+7. A connected piece with two joints edits atomically
+8. 45-degree beam joins a flat wooden face
+9. Opposed angled beams create one Roof Peak Joint
+10. Roof Peak preserves both manual angles
+11. Supported roof peak remains connected under ordinary load
+12. Unsupported roof peak remains vulnerable
+13. Losing a lower support can strain or break a roof peak
+14. Diagonal brace creates intentional joints
+15. T-joint requires a valid joint-capable side socket
+16. Ordinary side contact does not create a T-joint
+17. Invalid overlap is rejected
+18. Repeated stability tests do not duplicate constraints
+19. Reinforcement editing preserves wisp clearance
+20. Reload during preview restores the last committed graph
+
+Do not remove existing tests.
+
+ACCEPTANCE SCENARIOS
+
+A. ORDINARY CONNECTED-BEAM MOVE
+
+- Build two end-connected beams.
+- Select one beam.
+- Drag it without pressing Detach Joint.
+- Confirm joint-edit preview begins.
+- Move away and release validly.
+- Confirm old joint is removed once.
+- Confirm no stale constraint remains.
+- Undo and verify exact restoration.
+
+B. CANCEL CONNECTED EDIT
+
+- Begin moving a connected beam.
+- Cancel.
+- Confirm exact original transform.
+- Confirm exact original joint.
+- Confirm no revision or history change.
+
+C. RECONNECT TO NEW ENDPOINT
+
+- Move a connected beam from one endpoint to another compatible endpoint.
+- Confirm new joint preview.
+- Release.
+- Confirm one new joint.
+- Confirm old joint is removed.
+- Confirm no duplicates.
+
+D. ANGLED BEAM TO FLAT WOODEN FACE
+
+- Rotate beam to 45 degrees.
+- Approach a horizontal or vertical compatible wooden face.
+- Confirm flush face-joint preview.
+- Confirm 45-degree rotation is preserved.
+- Confirm no visible gap or penetration beyond tolerance.
+- Run stability testing.
+
+E. PEAKED ROOF
+
+- Construct two lower supports.
+- Rotate two rafters to opposing angles.
+- Join upper endpoints.
+- Confirm Roof Peak recognition.
+- Confirm lower face or support relationships.
+- Test stability.
+- Confirm a supported roof can stand.
+- Confirm the peak is not treated as an ordinary weak collinear splice.
+
+F. UNSUPPORTED PEAK
+
+- Join two angled rafters without adequate lower support.
+- Test stability.
+- Confirm the assembly falls, spreads, pivots, strains, or breaks naturally.
+- Confirm no artificial suspension.
+
+G. SUPPORT LOSS
+
+- Build a valid peaked roof.
+- Remove or undermine one lower support.
+- Test or strike the structure.
+- Confirm force redistribution may strain or break the appropriate joint.
+
+H. DIAGONAL BRACE
+
+- Build a post-and-beam frame.
+- Add a 45-degree brace.
+- Confirm brace-joint preview.
+- Test stability with and without the brace.
+- Confirm the brace influences lateral behavior without making the frame
+  indestructible.
+
+I. T-JOINT
+
+- Connect one beam endpoint to a designated side socket.
+- Confirm T-joint.
+- Attempt arbitrary side contact away from a socket.
+- Confirm no structural joint is created.
+
+J. MULTI-JOINT EDIT
+
+- Select a rafter connected at its lower and upper ends.
+- Move or rotate it.
+- Confirm both affected joints participate in one preview transaction.
+- Cancel and verify exact restoration.
+- Commit a valid change and verify atomic history.
+
+K. TOOLBAR AND MOBILE FLOW
+
+- Perform scenarios A through E on narrow portrait.
+- Confirm no mandatory manual detach.
+- Confirm toolbar does not cover the active connection.
+- Confirm preview labels are readable.
+- Confirm gestures remain responsive.
+
+L. REPEATED TEST AND RESTORE
+
+- Build a roof containing splice, face, peak, and brace joints.
+- Run Test Stability and restore at least three times.
+- Confirm logical joint and constraint counts remain constant.
+- Confirm no increasing energy or duplicate constraints.
+
+M. PROJECTILE IMPACT
+
+- Strike a connected roof.
+- Confirm joints may flex, strain, or break according to force.
+- Confirm beam damage and joint damage remain distinct.
+- Confirm settlement completes.
+
+N. REINFORCEMENT
+
+- Reach reinforcement with intact and broken joints.
+- Edit an intact connected piece without manual detachment.
+- Confirm broken joints remain broken.
+- Add a reserve beam and form a valid new connection.
+- Confirm surviving wisps block invalid manual overlap.
+
+O. PERSISTENCE
+
+Test:
+
+- Reload during normal Build
+- Reload during joint-edit preview
+- Retry Design
+- Start Over
+- Reload during reinforcement
+
+Confirm transforms, joints, history, inventory, and wisp state remain correct.
+
+P. REGRESSION
+
+Run all existing automated suites, including:
+
+- Wisp–debris contact
+- Siege lifecycle
+- Phase 4 presentation and POV
+- Phase 5 Bullseye
+- Existing timber joints and snapping
+- Wisp enclosure and placement clearance
+- Tutorial progression
+- Construction relevance
+- TypeScript compilation
+- Production build
+
+DELIVERY REQUIREMENTS
+
+Create the complete implementation and open the preview.
+
+Report:
+
+1. Files changed
+2. Existing manual-detach workflow and its replacement
+3. Joint-edit transaction lifecycle
+4. Cancel and commit behavior
+5. Face-based connection geometry
+6. Roof Peak recognition
+7. Roof Peak strength and directional behavior
+8. Diagonal Brace behavior
+9. T-joint behavior
+10. Candidate ranking and hysteresis
+11. Collision-validation boundary
+12. Multi-joint editing
+13. Stability-test integration
+14. Reinforcement behavior
+15. Undo and redo behavior
+16. Persistence and reload behavior
+17. New automated tests
+18. Results for acceptance scenarios A through P
+19. Confirmation that global material, attack, and wisp balance were unchanged
+20. Known limitations
+
+Do not claim this milestone passes merely because:
+- Detach Joint was hidden,
+- An angled beam visually touches another piece, or
+- A roof remains suspended.
+
+It passes only if:
+
+- Ordinary connected-piece editing no longer requires manual detachment.
+- Cancel restores the exact previous transform and joint graph.
+- Release commits a valid, atomic replacement graph.
+- Angled beams connect flush to appropriate faces.
+- Opposing rafters create a recognized Roof Peak Joint.
+- Supported roof geometry performs better than unsupported geometry without
+  becoming indestructible.
+- Diagonal braces and intentional T-joints work.
+- Manual rotation remains authoritative.
+- Invalid overlap remains impossible.
+- Undo, redo, test/restore, reinforcement, retry, reload, and previous accepted
+  systems remain correct.

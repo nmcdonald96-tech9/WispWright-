@@ -1250,8 +1250,10 @@ export class PresentationDirector {
         effectiveMode === 'RESULTS' ||
         effectiveMode === 'UNLOCK_PRESENTATION'
       ) {
+        const totalWisps = Math.max(1, wisps.length);
         const survivedCount = wisps.filter((w) => !w.isDispersed).length;
-        if (survivedCount >= 4) state = 'CELEBRATION_CHORUS';
+        if (survivedCount === totalWisps) state = 'CELEBRATION_CHORUS';
+        else if (survivedCount === totalWisps - 1 && survivedCount >= 2) state = 'RELIEVED_EXHALE';
         else if (survivedCount >= 1) state = 'SOLEMN_SURVIVAL';
         else state = 'DEFEAT_MOURN';
       }
@@ -1288,6 +1290,14 @@ export class PresentationDirector {
         lookTarget,
         blinkPhase,
       });
+    }
+
+    // Remove any stale wispStates entries that are not in the active level wisps
+    const activeIds = new Set(wisps.map((w) => w.id));
+    for (const key of Array.from(this.wispStates.keys())) {
+      if (!activeIds.has(key)) {
+        this.wispStates.delete(key);
+      }
     }
   }
 

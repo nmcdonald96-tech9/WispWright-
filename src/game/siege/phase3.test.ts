@@ -41,7 +41,7 @@ function runPhase3AcceptanceSuite(): void {
     siege.advanceOpeningSequence();
     assert(siege.mode === 'CONSTRUCTION', 'Expected CONSTRUCTION');
 
-    // 2. Place initial defenses (outer western shield at x=152)
+    // 2. Place initial defenses (outer western shield at x=152 and shelter roof beam at x=200)
     store.placePiece({
       id: 'init_stone_front',
       type: 'stone_block',
@@ -50,9 +50,9 @@ function runPhase3AcceptanceSuite(): void {
       isPrebuilt: false,
     });
     store.placePiece({
-      id: 'init_block_upper',
-      type: 'wood_block',
-      position: { x: 152, y: 708 },
+      id: 'init_beam_roof',
+      type: 'wood_beam',
+      position: { x: 200, y: 672 },
       rotation: 0,
       isPrebuilt: false,
     });
@@ -85,11 +85,11 @@ function runPhase3AcceptanceSuite(): void {
     siege.acknowledgeEmergencyDelivery();
     assert(siege.mode === 'REINFORCEMENT_ACTIVE', 'Expected return to REINFORCEMENT_ACTIVE');
 
-    // Place delivered stone block during reinforcement to brace the inner western foundation
+    // Place delivered stone block during reinforcement to brace the western wall
     const placedDeliveredStone = store.placePiece({
       id: 'reinf_delivered_stone',
       type: 'stone_block',
-      position: { x: 248, y: 756 },
+      position: { x: 152, y: 708 },
       rotation: 0,
       isPrebuilt: false,
     });
@@ -122,7 +122,7 @@ function runPhase3AcceptanceSuite(): void {
       'Expected sample unlock to be granted and persisted',
     );
     console.log(
-      `  -> Outcome: ${siege.level1Results!.classification} (${siege.level1Results!.wispsStable}/5 wisps, Mastery ${siege.level1Results!.masteryScore}/3, Unlock=${store.unlockState.reinforcementReserveUnlocked})\n`,
+      `  -> Outcome: ${siege.level1Results!.classification} (${siege.level1Results!.wispsStable}/3 wisps, Mastery ${siege.level1Results!.masteryScore}/3, Unlock=${store.unlockState.reinforcementReserveUnlocked})\n`,
     );
   }
 
@@ -204,7 +204,7 @@ function runPhase3AcceptanceSuite(): void {
     const p = store.getState().pieces.find((item) => item.id === 'intact_movable')!;
     assert(p.condition === 'INTACT', 'Piece at (500, 756) should remain INTACT');
 
-    const moved = store.movePiece('intact_movable', { x: 320, y: 756 }, 0);
+    const moved = store.movePiece('intact_movable', { x: 680, y: 730 }, 0);
     const rotated = store.rotatePiece('intact_movable', Math.PI / 4);
     assert(moved && rotated, 'INTACT player-owned piece must be movable and rotatable in reinforcement');
     assert(p.condition === 'INTACT', 'Moved piece must remain INTACT');
@@ -621,6 +621,7 @@ function runPhase3AcceptanceSuite(): void {
       'STANDARD flight duration must be within [0.8, 2.0]s',
     );
     console.log('  -> Status: PASSED (Phase 1, Phase 2, and Ballistic Spacing 100% intact)\n');
+    store.clearStorage();
   }
 
   console.log('==============================================================');

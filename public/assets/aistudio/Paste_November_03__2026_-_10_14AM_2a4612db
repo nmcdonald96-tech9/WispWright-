@@ -1,0 +1,933 @@
+UNIVERSAL BREAKABLE CONSTRUCTION BINDINGS
+
+The project currently supports modular construction geometry, corner and face
+features, automatic joint editing, timber joints, Roof Peak joints, braces,
+T-joints, supported contact, and breakable physical constraints.
+
+Recent device testing confirms one remaining foundational usability problem:
+
+Basic construction connectivity is still defined too narrowly around specific
+piece and material pairings.
+
+Observed examples:
+
+- Timber-to-timber connections can commit.
+- Timber-to-wood-block corner joints can commit.
+- Timber endpoints do not reliably connect to stone or prebuilt stone blocks.
+- Stone blocks do not appear to connect to other blocks.
+- Prebuilt pieces may expose different connection behavior from equivalent
+  player-placeable pieces.
+- Visually reasonable roofs may contain a valid Roof Peak but no lower
+  structural bindings.
+- The player can create a plausible structure that immediately falls apart
+  because some visually similar junctions are actual joints while others are
+  merely proximity or contact.
+
+PRODUCT DECISION
+
+Implement a universal, visible, breakable construction-binding system.
+
+The builder should allow compatible piece features to connect regardless of
+material pairing, provided:
+
+- The features are geometrically compatible.
+- The pieces are within documented snap or forgiving-closure tolerance.
+- The final colliders do not materially overlap.
+- The connection does not cross terrain, boundaries, or active wisps.
+- The relationship is intentionally previewed and committed.
+
+Material pairing should influence:
+
+- Binding strength
+- Compliance
+- Failure behavior
+- Visual binding treatment
+- Impact resistance
+- Load tolerance
+
+Material pairing should not arbitrarily prevent ordinary fortress construction.
+
+Examples that must become possible:
+
+- Timber Beam to Timber Beam
+- Timber Beam to Wood Block
+- Timber Beam to Stone Block
+- Timber Beam to prebuilt stone/environment block
+- Wood Block to Wood Block
+- Wood Block to Stone Block
+- Stone Block to Stone Block
+- Player-placeable piece to compatible prebuilt piece
+- Angled rafter to block corner
+- Horizontal beam to vertical post
+- Opposing rafters at a roof peak
+- Blocks stacked into a wall or column
+- Braces attached across mixed-material frames
+
+The binding must remain breakable.
+
+Universal connectivity does not mean indestructibility or automatic welding.
+
+PRIMARY OBJECTIVES
+
+1. Replace material-specific connection permission with universal geometric
+   compatibility.
+2. Centralize binding behavior by feature geometry and material-pair profile.
+3. Allow timber-to-stone and player-to-prebuilt connections.
+4. Allow block-to-block bindings where intentionally snapped.
+5. Preserve ordinary free contact and supported contact as non-jointed states.
+6. Make committed bindings visually unmistakable.
+7. Ensure every committed binding begins with stress-free rest geometry.
+8. Allow reasonably constructed roofs, frames, and walls to survive ordinary
+   gravity.
+9. Preserve vulnerability to unstable foundations, excessive loads, missing
+   supports, and projectile impacts.
+10. Avoid implementing separate one-off fixes for individual corners or
+    materials.
+
+PRESERVE
+
+Preserve all accepted behavior:
+
+- Authoritative logical game state
+- Inventory-to-world dragging
+- Tap-to-place accessibility
+- Inventory accounting
+- Manual rotation ownership
+- Rotation collision and sweep validation
+- Automatic joint-edit transactions
+- Cancel restoring exact transforms and joint graph
+- Modular piece dimensions
+- Authoritative faces, corners, sockets, and colliders
+- Forgiving architectural closure
+- Timber Splice joints
+- Timber Face joints
+- Timber Corner joints
+- Rafter Corner Seats
+- Roof Peak joints
+- Diagonal Brace joints
+- T-joints
+- Environmental anchors
+- Undo and redo
+- Stability testing
+- Build phase without wisps
+- Post-build wisp placement
+- Enclosed wisp placement
+- Three-wisp Level 1
+- Wisp–debris contact severity
+- Targeting and ballistics
+- Reinforcement
+- Bullseye behavior
+- Tactical, Follow, and POV cameras
+- Results
+- Retry Design
+- Start Over
+- Reset Level
+- Attempt and snapshot authority
+- Persistence and migration
+- Existing automated tests
+
+Do not change:
+
+- Global gravity
+- Piece dimensions
+- Starting inventory
+- Projectile behavior
+- Wisp dispersal thresholds
+- Level 1 attack balance
+- Result bands
+- Existing material durability merely to compensate for missing bindings
+
+DO NOT CREATE A SECOND JOINT SYSTEM
+
+Inspect the existing logical joint graph and constraint creation path.
+
+Extend the existing authoritative joint model.
+
+There must remain:
+
+- One logical joint graph
+- One joint-ID authority
+- One physics-constraint derivation path
+- One snapshot representation
+- One undo/redo model
+- One stability-test activation path
+
+Do not create a parallel “universal binding” collection that can coexist or
+conflict with existing joints.
+
+UNIVERSAL BINDING MODEL
+
+Introduce or formalize one generic logical connection:
+
+CONSTRUCTION_BINDING
+
+A Construction Binding contains:
+
+- Binding ID
+- Connection subtype
+- Piece A ID
+- Feature A ID
+- Piece B ID
+- Feature B ID
+- Material A
+- Material B
+- Canonical material-pair key
+- Shared seam or connection point
+- Final transform references
+- Rest position
+- Rest angle
+- Strength-profile ID
+- Compliance profile
+- Current state
+- Creation reason
+- Geometry schema version
+
+Existing specialized joints may remain meaningful subtypes, including:
+
+- TIMBER_SPLICE
+- FACE_BINDING
+- CORNER_BINDING
+- BLOCK_BINDING
+- ROOF_PEAK
+- DIAGONAL_BRACE
+- T_JOINT
+- ENVIRONMENTAL_ANCHOR
+
+The general Construction Binding provides common lifecycle and material-pair
+behavior.
+
+ROOF_PEAK and ENVIRONMENTAL_ANCHOR may retain specialized directional behavior.
+
+GEOMETRY FIRST, MATERIAL SECOND
+
+Connection eligibility should be evaluated in this order:
+
+1. Are the two features geometrically compatible?
+2. Can they be aligned within exact or forgiving tolerance?
+3. Is final placement collision-valid?
+4. Is the connection permitted by level boundaries and editing phase?
+5. Which connection subtype best represents the geometry?
+6. Which material-pair profile determines physical strength and presentation?
+
+Do not reject a valid connection merely because one piece is timber and the
+other is stone.
+
+Do not infer a joint from arbitrary overlap.
+
+UNIVERSAL JOINT-CAPABLE FEATURES
+
+Treat these geometric relationships as potentially bindable:
+
+- Endpoint to endpoint
+- Endpoint to compatible face
+- Endpoint to corner
+- Corner to corner
+- Compatible face to face
+- Designated brace socket
+- Designated T-joint socket
+- Roof Peak relationship
+- Environmental anchor socket
+
+Every current and future construction piece should expose authoritative geometric
+features through the centralized piece definition.
+
+Player-placeable and prebuilt pieces of the same geometry family should expose
+the same ordinary faces and corners.
+
+Prebuilt pieces may additionally expose environmental-anchor sockets.
+
+Do not let legacy prebuilt sockets suppress ordinary geometric candidates.
+
+PREBUILT PIECE COMPATIBILITY
+
+Prebuilt stone/environment blocks must expose:
+
+- Top face
+- Bottom face
+- Left face
+- Right face
+- Four corners
+- Face centers
+- Relevant joint-capable features
+
+These features must use the same world-transform calculations as player pieces.
+
+Prebuilt status may affect:
+
+- Whether the prebuilt piece can move
+- Binding strength
+- Whether an environmental anchor profile applies
+- Undo/edit ownership
+
+Prebuilt status must not prevent an ordinary compatible piece from binding to a
+valid face or corner.
+
+TIMBER-TO-STONE BINDING
+
+When a Timber Beam endpoint intentionally snaps to a stone face or corner:
+
+- Align it flush.
+- Preserve the player-selected angle.
+- Avoid penetration.
+- Create a breakable mixed-material binding.
+- Use a clearly visible provisional clamp, rune, collar, or binding.
+- Initialize stress-free rest geometry.
+- Allow ordinary timber weight and basic roof load.
+- Permit breakage under sufficient tension, shear, torque, support movement, or
+  projectile impact.
+
+Do not require a special inventory item for the prototype.
+
+This binding is a construction convention of the alchemical world, not literal
+real-world carpentry.
+
+WOOD-BLOCK-TO-STONE BINDING
+
+When a Wood Block intentionally snaps face-to-face or corner-to-corner with a
+Stone Block:
+
+- Permit a breakable mixed-material binding.
+- Preserve geometry and collider validity.
+- Do not require a hidden anchor.
+- Do not convert the two pieces into one rigid body.
+
+This is particularly important when:
+
+- A wooden wall block sits on a stone foundation.
+- A timber-compatible block extends a prebuilt stone wall.
+- A roof support uses mixed materials.
+
+STONE-TO-STONE BINDING
+
+When two stone blocks intentionally snap through compatible faces:
+
+- Create a breakable stone masonry-style binding.
+- Allow stable walls and columns under ordinary gravity.
+- Preserve separate physics bodies.
+- Allow cracks, shear failure, separation, and collapse under force.
+- Do not make stacked stone permanently rigid.
+- Do not create a binding for free placement with Snap disabled unless the player
+  explicitly selects a bind action.
+
+A visually aligned stone wall should no longer consist only of unrelated loose
+blocks when the player intentionally uses Snap to assemble it.
+
+WOOD-TO-WOOD BINDING
+
+Preserve accepted wood-to-wood behavior.
+
+Migrate it to the universal lifecycle where appropriate without changing its
+accepted results.
+
+Wood bindings should remain:
+
+- More compliant
+- More flexible
+- More vulnerable to bending and shear
+- Capable of limited flex before breakage
+
+MATERIAL-PAIR PROFILES
+
+Centralize material-pair profiles.
+
+At minimum:
+
+- WOOD_WOOD
+- WOOD_STONE
+- STONE_STONE
+- WOOD_ENVIRONMENT
+- STONE_ENVIRONMENT
+- ROOF_PEAK_WOOD
+- ENVIRONMENTAL_ANCHOR
+
+Each profile may define:
+
+- Tensile strength
+- Shear strength
+- Bending strength
+- Torque limit
+- Linear compliance
+- Angular compliance
+- Damping
+- Strain threshold
+- Break threshold
+- Presentation style
+
+Use canonical pair ordering so:
+
+- WOOD_STONE
+- STONE_WOOD
+
+resolve to the same profile unless direction is explicitly meaningful.
+
+Do not maintain duplicated mirrored profiles.
+
+PROVISIONAL RELATIVE BEHAVIOR
+
+Use measured ordinary-load forces and existing material behavior to select
+values.
+
+Expected relative behavior:
+
+WOOD_WOOD
+
+- Flexible
+- Moderate tension
+- Lower shear and bending resistance
+- Visible flex
+
+WOOD_STONE
+
+- Less flexible at the stone interface
+- Moderate ordinary-load stability
+- Vulnerable to torque and pullout
+- Strong enough for basic rafters on stone walls
+- Weaker than a true environmental anchor
+
+STONE_STONE
+
+- Strong under compression
+- Moderate shear resistance
+- Low flexibility
+- Vulnerable to separation, lateral shear, and foundation movement
+- Not indestructible
+
+ENVIRONMENTAL_ANCHOR
+
+- Stronger than ordinary construction bindings
+- Uses existing accepted anchor behavior
+
+Do not tune bindings to make every structure survive.
+
+STRESS-FREE COMMIT
+
+Every committed Construction Binding must derive rest geometry after final
+transforms are validated.
+
+Required:
+
+- Rest connection point equals the final shared seam or feature relationship.
+- Rest relative position matches committed geometry.
+- Rest relative angle matches committed geometry.
+- Initial positional error is near zero.
+- Initial angular error is near zero.
+- Initial stored constraint energy is near zero.
+
+Do not initialize constraints from:
+
+- Candidate-preview coordinates
+- Pre-correction transforms
+- Stale socket positions
+- Previous placement order
+- Legacy center sockets when a corner connection was committed
+
+STABILITY ACTIVATION
+
+Before the first physics step:
+
+1. Instantiate all accepted bodies at their final committed transforms.
+2. Clear stale linear and angular velocities.
+3. Instantiate all Construction Bindings exactly once.
+4. Instantiate Roof Peak and anchor specialization.
+5. Validate constraint count against logical binding count.
+6. Confirm no initial collider penetration.
+7. Record initial constraint errors.
+8. Activate gravity only after the complete binding graph exists.
+
+Do not let one connection load the structure before the other bindings are
+created.
+
+ORDINARY-GRAVITY CONTRACT
+
+A modest, visually reasonable construction assembled with committed bindings
+should not immediately disintegrate under the ordinary weight of its own
+components.
+
+Examples:
+
+- A two- or three-block stone wall should remain together under ordinary gravity.
+- A wooden block bound to a stone foundation should remain in place under its
+  own weight.
+- A timber rafter bound to a stone wall should remain attached under ordinary
+  timber load.
+- A peaked roof with two lower bindings and one Roof Peak should remain
+  assembled if its supports remain upright.
+- A post-and-beam frame with valid bindings should remain assembled under
+  ordinary gravity.
+
+This does not guarantee stability when:
+
+- Supports slide or tip
+- Foundations are narrow
+- A long span lacks support
+- Excessive mass is added
+- One connection is missing
+- The structure is visibly lopsided
+- Joints are already damaged
+- A projectile strikes
+- Debris impacts the structure
+
+VISUAL CONNECTION LANGUAGE
+
+Every committed binding should have a small visible construction treatment.
+
+Examples:
+
+WOOD_WOOD
+
+- Timber collar
+- Binding wrap
+- Wooden joinery mark
+
+WOOD_STONE
+
+- Alchemical clamp
+- Glowing rune band
+- Bracket or magical mortar seam
+
+STONE_STONE
+
+- Mortar seam
+- Alchemical masonry glyph
+- Small edge binding
+
+ROOF_PEAK
+
+- Peak cap or centered binding
+
+These visuals are provisional.
+
+Requirements:
+
+- Presentation-only
+- No physical body
+- No collider
+- Hidden during candidate-only state
+- Visible after commit
+- Removed or broken visually when the binding fails
+- Distinct from Snap sockets and support markers
+
+CONNECTION-STATE CLARITY
+
+Preserve clear states:
+
+CANDIDATE
+
+- Dashed/pulsing
+- Not committed
+
+ALIGNED
+
+- Geometrically aligned only
+- No binding
+
+SUPPORTED
+
+- Contact support only
+- No binding
+
+BOUND
+
+- Solid binding marker
+- Logical binding exists
+
+STRAINED
+
+- Binding exists and is under meaningful stress
+
+BROKEN
+
+- Constraint removed
+- Broken presentation
+
+The player should be able to tell before stability testing whether each junction
+is actually bound.
+
+SNAP ENABLED VERSUS DISABLED
+
+SNAP ENABLED
+
+- Compatible near features may create a binding candidate.
+- Valid release commits the binding.
+- Small forgiving correction may occur.
+
+SNAP DISABLED
+
+- Free placement remains available.
+- Ordinary contact remains possible.
+- Do not automatically create a structural binding merely because two pieces
+  appear close.
+- If useful, offer a contextual “Bind” action when compatible features are
+  already within binding tolerance.
+
+This preserves freeform placement while giving Snap a meaningful construction
+purpose.
+
+UNIVERSAL BIND ACTION
+
+For pieces manually placed with Snap disabled, provide an optional contextual:
+
+“Bind Connection”
+
+Show this only when:
+
+- Exactly one or a small number of compatible relationships are within binding
+  tolerance.
+- Final geometry is valid.
+- No overlap exists.
+
+If several relationships are plausible:
+
+- Show candidate cycling.
+- Do not bind randomly.
+
+Binding is:
+
+- Atomic
+- Undoable
+- Visibly previewed
+- Governed by the same universal model
+
+Do not require Bind Connection during ordinary Snap-enabled building.
+
+CANDIDATE RANKING
+
+When several connection candidates exist, prioritize:
+
+1. Valid geometry
+2. Player-selected angle preservation
+3. Near feature compatibility
+4. Architectural intent
+5. Smallest correction
+6. Candidate hysteresis
+7. Stable deterministic tie-breaker
+
+Examples:
+
+- Angled beam near stone upper corner:
+  prefer a corner binding over a distant face-center candidate.
+
+- Wood block on top of stone foundation:
+  prefer face-to-face foundation binding.
+
+- Stone block against stone block:
+  prefer face-to-face masonry binding.
+
+- Opposed rafters:
+  prefer Roof Peak.
+
+Do not allow legacy prebuilt sockets to outrank a clearly closer modular corner
+unless an explicit environmental anchor is intentionally selected.
+
+PREBUILT PIECE RULES
+
+Prebuilt pieces may be:
+
+- Fixed
+- Movable
+- Environment-owned
+- Player-owned
+
+Fixed prebuilt pieces:
+
+- Do not move during joint correction.
+- May receive universal bindings.
+- May expose stronger environmental-anchor candidates separately.
+
+Movable prebuilt pieces:
+
+- Follow ordinary edit rules.
+
+Bindings to fixed prebuilt pieces:
+
+- Apply correction only to the active player piece.
+- Do not move fixed geometry.
+- Remain breakable unless an environmental anchor is explicitly selected.
+
+UNSUPPORTED AND WEAK STRUCTURES
+
+Universal bindings must not remove structural strategy.
+
+Examples:
+
+- A roof on two loose blocks may push the blocks outward and collapse.
+- A tall narrow stone wall may tip as a bound assembly.
+- A long bound timber span may sag or break.
+- A bound wall on a weak foundation may fall.
+- A projectile may break the binding rather than the pieces.
+- A joint may remain intact while a piece itself cracks or breaks.
+
+The game should distinguish:
+
+- Binding failure
+- Piece failure
+- Support movement
+- Foundation failure
+- Missing connection
+
+SUPPORT AND LOAD DIAGNOSTICS
+
+Before stability testing, optionally communicate:
+
+- All intended junctions bound
+- One junction supported only
+- One junction unresolved
+- Loose foundation
+- Narrow support may tip
+- Roof complete, foundations unanchored
+
+Do not claim guaranteed stability.
+
+Player-facing messages must remain concise.
+
+UNDO, REDO, AND EDITING
+
+Universal bindings must integrate with automatic joint-edit transactions.
+
+Moving or rotating a bound piece:
+
+- Begins binding-edit preview.
+- Temporarily suspends affected bindings in the preview layer.
+- Preserves neighboring pieces.
+- Previews new relationships.
+- Commits the final binding graph atomically.
+- Cancel restores exact prior transforms and bindings.
+
+Undo and redo must restore:
+
+- Piece transforms
+- Binding IDs
+- Material-pair profiles
+- Binding states
+- Construction revision
+
+No duplicate constraints.
+
+REINFORCEMENT
+
+Use universal bindings during reinforcement.
+
+Requirements:
+
+- Intact pieces may form new bindings.
+- Broken debris cannot bind.
+- Broken bindings remain broken unless intact pieces form a new deliberate
+  connection.
+- Surviving wisps block invalid overlap.
+- Bindings remain breakable during Attack 2.
+- Reinforcement history remains isolated.
+
+PERSISTENCE AND MIGRATION
+
+Persist:
+
+- Binding ID
+- Subtype
+- Piece IDs
+- Feature IDs
+- Material-pair profile
+- Rest geometry
+- State
+- Geometry schema
+- Creation source
+
+Migrate existing accepted joints into universal Construction Bindings.
+
+Preserve:
+
+- Stable IDs where possible
+- Existing accepted timber behavior
+- Roof Peak specialization
+- Environmental anchors
+- Inventory
+- Three-wisp Level 1
+- Active-attempt authority
+
+Do not create duplicate old and new joints.
+
+If a legacy relationship cannot migrate safely:
+
+- Preserve the pieces.
+- Remove only the invalid relationship.
+- Report diagnostically.
+- For unsafe prototype active state, reset safely to Level 1 BUILD while
+  preserving profile preferences.
+
+AUTOMATED TESTS
+
+Add tests for:
+
+1. Timber-to-timber binding
+2. Timber-to-wood-block binding
+3. Timber-to-stone corner binding
+4. Timber-to-prebuilt-stone binding
+5. Wood-block-to-stone face binding
+6. Wood-block-to-prebuilt-block binding
+7. Stone-to-stone face binding
+8. Player piece to fixed prebuilt piece
+9. Left/right mirrored parity
+10. Source/target order parity
+11. Placement-order independence
+12. Snap-enabled automatic binding
+13. Snap-disabled free contact
+14. Snap-disabled explicit Bind Connection
+15. Candidate versus committed marker
+16. Stress-free rest geometry
+17. All constraints active before first physics step
+18. Bound wall survives ordinary gravity
+19. Timber-to-stone rafter survives ordinary timber load
+20. Supported peaked roof remains assembled
+21. Loose supports may still slide or tip
+22. Long unsupported span remains vulnerable
+23. Projectile can break bindings
+24. Piece damage remains distinct from binding damage
+25. Undo and redo
+26. Automatic binding-edit transactions
+27. Reinforcement
+28. Persistence and migration
+29. No duplicate constraints
+30. Repeated test and restore
+31. Startup/reset authority
+32. Three-wisp Level 1
+33. Existing wisp–debris contact
+34. Existing siege, Bullseye, camera, and POV tests
+35. TypeScript and production build
+
+ACCEPTANCE SCENARIOS
+
+A. TIMBER TO STONE
+
+- Place an angled timber endpoint near a stone upper corner.
+- Confirm a universal mixed-material binding candidate.
+- Commit.
+- Confirm a solid binding marker.
+- Test stability.
+- Confirm ordinary timber weight does not immediately separate it.
+
+B. TIMBER TO PREBUILT STONE
+
+- Repeat with a fixed blue-gray prebuilt block.
+- Confirm ordinary modular corner geometry is available.
+- Confirm the prebuilt piece does not move.
+- Confirm the binding remains breakable.
+
+C. WOOD BLOCK ON STONE FOUNDATION
+
+- Snap a Wood Block onto a Stone Block face.
+- Confirm a committed mixed-material binding.
+- Test stability.
+- Confirm the wood block remains attached under its own weight.
+
+D. STONE WALL
+
+- Bind two or three stone blocks.
+- Confirm a visible masonry-style binding.
+- Confirm ordinary-gravity stability.
+- Apply lateral force or projectile impact.
+- Confirm possible shear, tipping, cracking, or binding failure.
+
+E. PEAKED ROOF ON STONE SUPPORTS
+
+- Use two stone or prebuilt supports.
+- Bind lower rafter endpoints to the inner upper corners.
+- Bind rafters at Roof Peak.
+- Confirm all three committed relationships.
+- Test stability.
+- Confirm roof remains assembled if supports remain stable.
+
+F. PEAKED ROOF ON LOOSE SUPPORTS
+
+- Use loose, narrow support blocks.
+- Confirm all bindings exist.
+- Test stability.
+- Permit supports to slide or tip naturally.
+- Confirm failure is attributed to foundation movement, not missing bindings.
+
+G. MIXED FRAME
+
+- Create a structure using wood beams, a wood block, stone blocks, and a
+  prebuilt piece.
+- Confirm predictable connectivity across materials.
+- Confirm different bindings use appropriate profiles.
+
+H. SNAP OFF
+
+- Place compatible pieces manually with Snap disabled.
+- Confirm no automatic binding.
+- Use Bind Connection.
+- Confirm one valid binding is committed.
+
+I. BREAKAGE
+
+- Strike each binding class with a suitable projectile or diagnostic impulse.
+- Confirm bindings can strain and break.
+- Confirm pieces remain separate authoritative bodies.
+
+J. EDITING
+
+- Move a universally bound piece without manual detachment.
+- Cancel and confirm exact restoration.
+- Commit elsewhere and confirm an atomic graph replacement.
+
+K. REPEATED TESTING
+
+- Test and restore mixed-material construction three times.
+- Confirm binding and constraint counts remain constant.
+- Confirm no accumulated energy.
+
+L. REINFORCEMENT
+
+- Create mixed-material bindings during reinforcement.
+- Confirm wisp clearance and history rules.
+
+M. PERSISTENCE
+
+- Reload, Retry Design, Start Over, and Reset Level.
+- Confirm bindings restore appropriately.
+- Confirm no legacy duplicates.
+
+N. REGRESSION
+
+Run all existing suites and production build.
+
+DELIVERY REQUIREMENTS
+
+Create the implementation and open the preview.
+
+Report:
+
+1. Files changed
+2. Existing material-specific restrictions found
+3. Universal binding model
+4. Geometric eligibility flow
+5. Material-pair profiles
+6. Timber-to-stone behavior
+7. Block-to-block behavior
+8. Prebuilt-piece behavior
+9. Stress-free initialization
+10. Connection-state visuals
+11. Snap-off Bind Connection behavior
+12. Stability behavior
+13. Breakage behavior
+14. Editing, undo, and redo
+15. Reinforcement
+16. Migration
+17. Automated tests
+18. Results for acceptance scenarios A through N
+19. Confirmation that pieces, projectiles, wisps, and Level 1 balance were
+    unchanged
+20. Known limitations
+
+Do not claim this passes merely because every piece can display a connection
+marker.
+
+It passes only if:
+
+- Connectivity is based on geometry rather than arbitrary material exceptions.
+- Mixed-material and prebuilt connections are possible.
+- Bindings remain visible and breakable.
+- Reasonable constructions survive ordinary gravity.
+- Weak foundations and excessive loads remain meaningful.
+- Snap disabled still permits free physical placement.
+- Physics, persistence, state authority, and previous accepted behavior remain
+  correct.

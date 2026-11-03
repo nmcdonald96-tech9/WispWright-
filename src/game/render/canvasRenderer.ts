@@ -141,17 +141,37 @@ export class CanvasRenderer {
       this.physicsBridge = new PhysicsBridge(this.store.getState());
       soundSynth.playTestStart();
     } else if (mode === 'CONSTRUCTION') {
+      const comingFromStabilityTest = this.mode === 'TESTING_SIMULATION';
       if (this.physicsBridge) {
         this.physicsBridge.teardown();
         this.physicsBridge = null;
       }
-      if (this.siegeController.physicsBridge) {
-        this.siegeController.returnToConstruction();
+      if (comingFromStabilityTest && this.store.hasPreTestSnapshot()) {
+        this.store.restorePreTestSnapshot(true);
       }
-      this.store.restorePreTestSnapshot(true);
       this.store.setSavedPhase('CONSTRUCTION');
       soundSynth.playSnap();
     }
+  }
+
+  public resetLevel(): void {
+    this.presentationDirector.skipReplay();
+    this.presentationDirector.clearReplayData();
+    this.selectedPieceId = null;
+    this.dragState = null;
+    this.wispDragState = null;
+    this.selectedWispId = null;
+    this.mode = 'CONSTRUCTION';
+    if (this.physicsBridge) {
+      this.physicsBridge.teardown();
+      this.physicsBridge = null;
+    }
+    this.camera.resetView();
+    this.siegeController.resetLevel();
+  }
+
+  public startOver(): void {
+    this.resetLevel();
   }
 
   public acceptStableDesign(enterPlaceWisps = true): boolean {

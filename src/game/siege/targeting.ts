@@ -391,7 +391,7 @@ export function generateTargetCandidates(
     type: 'fallback',
     position: { x: 200, y: 708 },
     supportingCount: 1,
-    wispsNearCount: 2,
+    wispsNearCount: Math.min(2, Math.max(1, activeWisps.length)),
     nearestWispDist: 85,
     isExposed: true,
   });
@@ -770,8 +770,12 @@ export function scoreCandidates(
       }
     }
 
-    // 3. Wisp Proximity & Protection Score
+    // 3. Wisp Proximity & Protection Score (normalized to active wisp count)
     let wispProximityScore = 0;
+    const activeWispCount = Math.max(
+      1,
+      levelState.wisps.filter((w) => !w.isDispersed).length || levelState.wisps.length || 3,
+    );
     if (cand.type === 'wisp_threat') {
       wispProximityScore += 75;
     } else {
@@ -779,7 +783,15 @@ export function scoreCandidates(
       if (cand.nearestWispDist < 320) {
         wispProximityScore += Math.max(0, 30 * (1 - cand.nearestWispDist / 320));
       }
-      wispProximityScore += Math.min(56, cand.wispsNearCount * 14);
+      if (cand.wispsNearCount > 0) {
+        // Normalize nearby-wisp scoring relative to level wisp count:
+        // - 1 nearby wisp is already important (16 pts for <=3 wisps)
+        // - 2 nearby wisps is a major cluster target (32 pts)
+        // - 3 nearby wisps is the entire protected population (48 pts)
+        const totalLevelWisps = Math.max(1, levelState.wisps.length || 3);
+        const perWispBonus = totalLevelWisps <= 3 ? 16 : 14;
+        wispProximityScore += Math.min(56, cand.wispsNearCount * perWispBonus);
+      }
     }
 
     // 4. Structural Importance Score

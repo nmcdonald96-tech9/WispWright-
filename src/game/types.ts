@@ -264,7 +264,269 @@ export interface WispContactEvent {
 
 export type TimberJointState = 'INTACT' | 'STRAINED' | 'BROKEN';
 
-export type TimberJointType = 'BEAM_END_TO_BEAM_END' | 'BEAM_END_TO_BEAM_SIDE';
+export type ConstructionBindingSubtype =
+  | 'TIMBER_SPLICE'
+  | 'RAFTER_CORNER_SEAT'
+  | 'FACE_BINDING'
+  | 'CORNER_BINDING'
+  | 'BLOCK_BINDING'
+  | 'ROOF_PEAK'
+  | 'DIAGONAL_BRACE'
+  | 'T_JOINT'
+  | 'ENVIRONMENTAL_ANCHOR';
+
+export type MaterialPairProfileId =
+  | 'WOOD_WOOD'
+  | 'WOOD_STONE'
+  | 'STONE_STONE'
+  | 'WOOD_ENVIRONMENT'
+  | 'STONE_ENVIRONMENT'
+  | 'ROOF_PEAK_WOOD'
+  | 'ENVIRONMENTAL_ANCHOR';
+
+export type ConnectionTaxonomyCategory =
+  | 'FREE_CONTACT'
+  | 'SUPPORTED_CONTACT'
+  | 'POSITIONAL_SNAP'
+  | 'TIMBER_SPLICE'
+  | 'TIMBER_FACE'
+  | 'TIMBER_CORNER'
+  | 'RAFTER_CORNER_SEAT'
+  | 'FACE_BINDING'
+  | 'CORNER_BINDING'
+  | 'BLOCK_BINDING'
+  | 'ROOF_PEAK'
+  | 'DIAGONAL_BRACE'
+  | 'TIMBER_T_JOINT'
+  | 'ENVIRONMENTAL_ANCHOR'
+  | 'NONE';
+
+export type TimberJointType =
+  | 'TIMBER_SPLICE'
+  | 'TIMBER_FACE'
+  | 'TIMBER_CORNER'
+  | 'RAFTER_CORNER_SEAT'
+  | 'FACE_BINDING'
+  | 'CORNER_BINDING'
+  | 'BLOCK_BINDING'
+  | 'ROOF_PEAK'
+  | 'DIAGONAL_BRACE'
+  | 'TIMBER_T_JOINT'
+  | 'T_JOINT'
+  | 'ENVIRONMENTAL_ANCHOR'
+  | 'BEAM_END_TO_BEAM_END'
+  | 'BEAM_END_TO_BEAM_SIDE';
+
+export type PieceFaceId =
+  | 'END_A_FACE'
+  | 'END_B_FACE'
+  | 'TOP_FACE'
+  | 'BOTTOM_FACE'
+  | 'SIDE_A_FACE'
+  | 'SIDE_B_FACE'
+  | 'SIDE_FACE_A'
+  | 'SIDE_FACE_B'
+  | 'LEFT_FACE'
+  | 'RIGHT_FACE';
+
+export type PieceCornerId =
+  | 'TOP_LEFT_CORNER'
+  | 'TOP_RIGHT_CORNER'
+  | 'BOTTOM_LEFT_CORNER'
+  | 'BOTTOM_RIGHT_CORNER'
+  | 'END_A_INNER_CORNER'
+  | 'END_A_OUTER_CORNER'
+  | 'END_B_INNER_CORNER'
+  | 'END_B_OUTER_CORNER'
+  | 'END_A_TOP_CORNER'
+  | 'END_A_BOTTOM_CORNER'
+  | 'END_B_TOP_CORNER'
+  | 'END_B_BOTTOM_CORNER';
+
+export type PieceFeatureId =
+  | PieceFaceId
+  | PieceCornerId
+  | 'FACE_CENTER_TOP'
+  | 'FACE_CENTER_BOTTOM'
+  | 'FACE_CENTER_LEFT'
+  | 'FACE_CENTER_RIGHT'
+  | 'END_A_CENTER'
+  | 'END_B_CENTER'
+  | 'CENTER';
+
+export interface LocalCornerDef {
+  id: PieceCornerId;
+  localPos: Vector2;
+  localNormal: Vector2;
+  adjacentFaces: [PieceFaceId, PieceFaceId];
+  jointCapable: boolean;
+}
+
+export interface WorldCorner extends LocalCornerDef {
+  pieceId: string;
+  pieceType: MaterialType;
+  worldPos: Vector2;
+  worldNormal: Vector2;
+}
+
+export interface LocalFaceDef {
+  id: PieceFaceId;
+  faceId?: PieceFaceId;
+  center: Vector2;
+  start: Vector2;
+  end: Vector2;
+  normal: Vector2;
+  tangent: Vector2;
+  length: number;
+  jointCapable: boolean;
+}
+
+export interface WorldFace extends LocalFaceDef {
+  pieceId: string;
+  pieceType: MaterialType;
+  worldCenter: Vector2;
+  worldStart: Vector2;
+  worldEnd: Vector2;
+  worldNormal: Vector2;
+  worldTangent: Vector2;
+}
+
+export interface PartnerPieceAdjustment {
+  pieceId: string;
+  beforePos: Vector2;
+  afterPos: Vector2;
+  proposedPosition?: Vector2;
+  beforeRot: number;
+  afterRot: number;
+  correctionVector: Vector2;
+}
+
+export interface PeakSymmetryDiagnostics {
+  supportHeightDifference: number;
+  angleMagnitudeDifferenceDeg: number;
+  apexWorldCoordinate: Vector2;
+  apexSymmetryOffset: number;
+  endpointSeamSeparation: number;
+  placementOrderEquivalent: boolean;
+  isSymmetricSlope?: boolean;
+  isSymmetricConfiguration?: boolean;
+}
+
+export type ClosureClassification = 'EXACT' | 'FORGIVING' | 'AMBIGUOUS' | 'INVALID';
+
+export type SupportFoundationClassification =
+  | 'FIXED_ENVIRONMENTAL_SUPPORT'
+  | 'ANCHORED_PIECE'
+  | 'STABLE_COLUMN_CANDIDATE'
+  | 'FREE_STANDING_LOOSE_BLOCK'
+  | 'UNSTABLE_OR_UNRESOLVED_SUPPORT';
+
+export type VisualConnectionState =
+  | 'CANDIDATE_PREVIEW'
+  | 'POSITIONAL_ALIGNMENT'
+  | 'SUPPORTED_CONTACT'
+  | 'COMMITTED_JOINT'
+  | 'STRAINED_JOINT';
+
+export type VisualJointCapType =
+  | 'PEAK_CAP'
+  | 'CORNER_BINDING'
+  | 'TIMBER_COLLAR'
+  | 'ALCHEMICAL_CLAMP'
+  | 'MASONRY_SEAM'
+  | 'ALCHEMICAL_RUNE'
+  | 'NONE';
+
+export interface CanonicalRelationshipDescription {
+  pieceAId: string;
+  pieceAType: MaterialType;
+  featureAId: string;
+  pieceBId: string;
+  pieceBType: MaterialType;
+  featureBId: string;
+  relativeWorldPosition: Vector2;
+  relativeRotationRad: number;
+  connectionTaxonomy: ConnectionTaxonomyCategory;
+  jointProfileId: string;
+  canonicalKey: string;
+  mirroredEquivalentKey: string;
+}
+
+export interface RoofAssemblyPreview {
+  detected: boolean;
+  status:
+    | 'COMPLETE_SUPPORTED_ROOF'
+    | 'MISSING_LEFT_SUPPORT'
+    | 'MISSING_RIGHT_SUPPORT'
+    | 'PEAK_UNRESOLVED'
+    | 'AMBIGUOUS_OR_INVALID_CLOSURE';
+  closureClassification: ClosureClassification;
+  leftRafterPieceId: string | null;
+  rightRafterPieceId: string | null;
+  leftSupportPieceId: string | null;
+  rightSupportPieceId: string | null;
+  peakWorldPos: Vector2 | null;
+  leftLowerWorldPos: Vector2 | null;
+  rightLowerWorldPos: Vector2 | null;
+  leftLowerConnectionState: VisualConnectionState | 'UNCONNECTED';
+  rightLowerConnectionState: VisualConnectionState | 'UNCONNECTED';
+  peakConnectionState: VisualConnectionState | 'UNCONNECTED';
+  leftSupportFoundationClassification: SupportFoundationClassification;
+  rightSupportFoundationClassification: SupportFoundationClassification;
+  balancedPieceAdjustments: PartnerPieceAdjustment[];
+  proposedJoints: ProposedTimberJoint[];
+  summaryMessage: string;
+}
+
+export interface InitialJointStressDiagnostic {
+  jointId: string;
+  jointType: TimberJointType;
+  pieceAId: string;
+  pieceBId: string;
+  initialPositionalErrorPx: number;
+  initialAngularErrorRad: number;
+  initialStoredConstraintEnergy: number;
+}
+
+export interface RoofSupportDiagnosticSummary {
+  peakConnected: boolean;
+  leftLowerRafterSupported: boolean;
+  rightLowerRafterSupported: boolean;
+  lowerSupportUnresolved: boolean;
+  leftSupportType: 'STRUCTURAL_JOINT' | 'CONTACT_ONLY' | 'ENVIRONMENTAL_ANCHOR' | 'NONE';
+  rightSupportType: 'STRUCTURAL_JOINT' | 'CONTACT_ONLY' | 'ENVIRONMENTAL_ANCHOR' | 'NONE';
+  leftSupportFoundationClassification?: SupportFoundationClassification;
+  rightSupportFoundationClassification?: SupportFoundationClassification;
+  supportColumnAppearsUnstable: boolean;
+  summaryMessage: string;
+  foundationAdvisoryMessage?: string | null;
+}
+
+export interface CandidateRankingBreakdown {
+  candidateId?: string;
+  candidateLabel?: string;
+  targetPieceId?: string;
+  sourceFeatureId?: string;
+  targetFeatureId?: string;
+  validGeometry?: boolean;
+  noColliderPenetration?: boolean;
+  rotationPreserved?: boolean;
+  explicitFeatureCompatibility?: number;
+  architecturalIntentConfidence?: number;
+  pointerProximityPx?: number;
+  totalPositionalCorrectionPx?: number;
+  partnerMovementPx?: number;
+  pointerDistanceScore: number;
+  angleCompatibilityScore: number;
+  specificityScore: number;
+  hysteresisBonus: number;
+  supportCompletenessBonus: number;
+  totalScore: number;
+  finalScore?: number;
+  closureClassification?: ClosureClassification;
+  canonicalKey?: string;
+  mirroredEquivalentKey?: string;
+}
 
 export interface TimberJointStrengthProfile {
   profileId: string;
@@ -278,13 +540,21 @@ export interface TimberJointStrengthProfile {
   breakImpulseThreshold: number; // Direct impact impulse threshold that snaps the joint
   accumulatedStressThreshold: number; // Continuous overload stress budget before snapping
   strainedStressRatio: number; // Ratio (0..1) at which joint transitions to STRAINED
+  strainThreshold?: number; // Explicit strain stress threshold
+  breakThreshold?: number; // Explicit break stress threshold
 }
 
 export interface TimberJoint {
   jointId: string;
+  bindingId?: string;
   jointType: TimberJointType;
+  connectionSubtype?: ConstructionBindingSubtype;
   pieceAId: string;
   pieceBId: string;
+  materialA?: MaterialType;
+  materialB?: MaterialType;
+  materialPairKey?: MaterialPairProfileId;
+  isPrebuiltBinding?: boolean;
   socketAId: string;
   socketBId: string;
   localAnchorA: Vector2;
@@ -293,16 +563,40 @@ export interface TimberJoint {
   restAngle: number; // angleB - angleA at creation/update
   restSeparation: number; // distance(worldSocketA, worldSocketB) at creation/update
   strengthProfile: string;
+  complianceProfile?: string;
   state: TimberJointState;
   currentStress: number;
   maxStressObserved: number;
   createdInPhase: 'BUILD' | 'REINFORCEMENT';
+  creationReason?:
+    | 'SNAP_COMMIT'
+    | 'EXPLICIT_BIND'
+    | 'MANUAL_BIND'
+    | 'MANUAL_BIND_ACTION'
+    | 'EDIT_PRESERVED'
+    | 'REINFORCEMENT_COMMIT'
+    | 'MIGRATED';
+  geometrySchemaVersion?: number;
   brokenInPhase?: string | null;
   brokenByAttackId?: string | null;
   failureReason?: string | null;
   breakPosition?: Vector2 | null;
   breakTimestamp?: number | null;
+  sourceFaceId?: PieceFaceId | null;
+  targetFaceId?: PieceFaceId | null;
+  sourceCornerId?: PieceCornerId | null;
+  targetCornerId?: PieceCornerId | null;
+  lowerSupportsDetected?: boolean;
+  canonicalRelationship?: CanonicalRelationshipDescription | null;
+  closureClassification?: ClosureClassification;
+  visualConnectionState?: VisualConnectionState;
+  visualJointCapType?: VisualJointCapType;
+  initialPositionalErrorPx?: number;
+  initialAngularErrorRad?: number;
+  initialConstraintEnergy?: number;
 }
+
+export type ConstructionBinding = TimberJoint;
 
 export interface ProposedTimberJoint {
   targetPieceId: string;
@@ -314,9 +608,80 @@ export interface ProposedTimberJoint {
   localAnchorB: Vector2;
   worldPosition: Vector2;
   jointType: TimberJointType;
+  connectionSubtype?: ConstructionBindingSubtype;
+  materialA?: MaterialType;
+  materialB?: MaterialType;
+  materialPairKey?: MaterialPairProfileId;
+  isPrebuiltBinding?: boolean;
   restAngle: number;
   restSeparation: number;
   strengthProfile: string;
+  complianceProfile?: string;
+  creationReason?:
+    | 'SNAP_COMMIT'
+    | 'EXPLICIT_BIND'
+    | 'MANUAL_BIND'
+    | 'MANUAL_BIND_ACTION'
+    | 'EDIT_PRESERVED'
+    | 'REINFORCEMENT_COMMIT'
+    | 'MIGRATED';
+  connectionTaxonomy?: ConnectionTaxonomyCategory;
+  sourceFaceId?: PieceFaceId | null;
+  targetFaceId?: PieceFaceId | null;
+  sourceCornerId?: PieceCornerId | null;
+  targetCornerId?: PieceCornerId | null;
+  sourceFeatureType?: 'socket' | 'face' | 'corner' | 'apex';
+  targetFeatureType?: 'socket' | 'face' | 'corner' | 'apex';
+  sourceFaceNormal?: Vector2;
+  targetFaceNormal?: Vector2;
+  lowerSupportsDetected?: boolean;
+  preservedJointId?: string | null;
+  seamSeparation?: number;
+  balancedAdjustmentActive?: boolean;
+  partnerPieceAdjustment?: PartnerPieceAdjustment | null;
+  partnerPieceAdjustments?: PartnerPieceAdjustment[];
+  peakSymmetryDiagnostics?: PeakSymmetryDiagnostics | null;
+  roofSupportSummary?: RoofSupportDiagnosticSummary | null;
+  closureClassification?: ClosureClassification;
+  canonicalRelationship?: CanonicalRelationshipDescription | null;
+  roofAssemblyPreview?: RoofAssemblyPreview | null;
+  visualConnectionState?: VisualConnectionState;
+  visualJointCapType?: VisualJointCapType;
+  playerFacingConnectionLabel?: string;
+}
+
+export interface JointEditTransactionSnapshot {
+  operationId: string;
+  pieceId: string;
+  startTransform: {
+    position: Vector2;
+    rotation: number;
+    preferredRotation: number;
+    rotationSource: RotationSource;
+    manualRotationRevision: number;
+    attachedAnchorId?: string;
+  };
+  partnerPieceStartTransforms?: Record<
+    string,
+    {
+      position: Vector2;
+      rotation: number;
+      preferredRotation: number;
+      rotationSource: RotationSource;
+      manualRotationRevision: number;
+      attachedAnchorId?: string;
+    }
+  >;
+  partnerPieceTransforms?: Record<string, { position: Vector2; rotation: number }>;
+  pieceCondition: PieceCondition;
+  affectedJoints: TimberJoint[];
+  allJointsAtStart: TimberJoint[];
+  socketPairs: Array<{ jointId: string; socketAId: string; socketBId: string }>;
+  strengthProfiles: Record<string, string>;
+  neighborPieceIds: string[];
+  constructionRevision: number;
+  inventorySnapshot: Record<MaterialType, number>;
+  startedAt: number;
 }
 
 export interface TimberJointDiagnostics {
@@ -332,6 +697,7 @@ export interface TimberJointDiagnostics {
     | 'SUPPORTED_CONTACT'
     | 'POSITION_SNAP'
     | 'NONE';
+  connectionTaxonomy?: ConnectionTaxonomyCategory;
   jointEligibility: boolean;
   overlapClassification:
     | 'NONE'
@@ -353,6 +719,103 @@ export interface TimberJointDiagnostics {
   lastJointBreakReason: string | null;
   lastJointBreakAttackOrPhase: string | null;
   playerFriendlyJointMessage: string | null;
+  // Intuitive Joint Editing & Angled Timber Construction Diagnostics
+  selectedPieceId?: string | null;
+  jointEditPreviewActive?: boolean;
+  editStartTransform?: { position: Vector2; rotation: number } | null;
+  suspendedPreviewJointIds?: string[];
+  preservedJointCandidates?: string[];
+  removedJointCandidates?: string[];
+  newJointCandidates?: Array<{
+    targetPieceId: string;
+    sourceSocketId: string;
+    targetSocketId: string;
+    jointType: TimberJointType;
+    strengthProfile: string;
+  }>;
+  candidateType?: ConnectionTaxonomyCategory;
+  sourceFaceOrSocket?: string | null;
+  targetFaceOrSocket?: string | null;
+  sourceFaceNormal?: Vector2 | null;
+  targetFaceNormal?: Vector2 | null;
+  relativeAngle?: number | null;
+  separation?: number | null;
+  positionalCorrection?: Vector2 | null;
+  rotationalCorrection?: number | null;
+  connectionProfileId?: string | null;
+  candidateLockState?: 'LOCKED' | 'UNLOCKED' | 'HYSTERESIS_HOLD';
+  jointGraphBeforeEdit?: string[];
+  jointGraphAfterProposedEdit?: string[];
+  lastEditOutcome?: 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'ACTIVE' | 'IDLE';
+  activeLogicalJointCount?: number;
+  activePhysicsConstraintCount?: number;
+  duplicateConstraintWarning?: boolean;
+  perJointStressValues?: Record<string, number>;
+  jointFailureReason?: string | null;
+  historyOperationId?: string | null;
+  restoreReason?: string | null;
+  lowerSupportsDetected?: boolean;
+  suspendedJointIds?: string[];
+  preservedJointIds?: string[];
+  removedJointIds?: string[];
+  createdJointIds?: string[];
+  activeSourceFaceId?: PieceFaceId | string | null;
+  activeTargetFaceId?: PieceFaceId | string | null;
+  faceContactNormal?: Vector2 | null;
+  roofPeakDetected?: boolean;
+  roofPeakLowerSupportsDetected?: boolean;
+  diagonalBraceDetected?: boolean;
+  // Modular Construction Geometry, Corner Joints & Symmetric Roof Diagnostics
+  geometrySchemaVersion?: number;
+  baseConstructionUnit?: number;
+  selectedPieceDimensionsUnits?: { widthUnits: number; heightUnits: number } | null;
+  selectedPieceVisualBounds?: { width: number; height: number } | null;
+  selectedPieceColliderBounds?: { width: number; height: number } | null;
+  sourceFeatureType?: 'socket' | 'face' | 'corner' | 'apex' | null;
+  sourceFeatureId?: string | null;
+  targetFeatureType?: 'socket' | 'face' | 'corner' | 'apex' | null;
+  targetFeatureId?: string | null;
+  endpointSeparation?: number | null;
+  seamSeparation?: number | null;
+  apexWorldCoordinate?: Vector2 | null;
+  apexSymmetryOffset?: number | null;
+  balancedAdjustmentActive?: boolean;
+  pieceACorrection?: Vector2 | null;
+  pieceBCorrection?: Vector2 | null;
+  placementOrderEquivalent?: boolean | null;
+  roofSupportSummary?: RoofSupportDiagnosticSummary | null;
+  peakSymmetryDiagnostics?: PeakSymmetryDiagnostics | null;
+  candidateRankingBreakdown?: CandidateRankingBreakdown | null;
+  candidateCycleIndex?: number;
+  candidateCycleCount?: number;
+  availableCandidateLabels?: string[];
+  currentCandidateLabel?: string | null;
+  migrationResult?: string | null;
+  invalidMigratedJointCount?: number;
+  // Forgiving Architectural Snap, Stress-Free Joint Closure & Ordinary-Load Stability Diagnostics
+  canonicalRelationship?: CanonicalRelationshipDescription | null;
+  mirroredEquivalentRelationship?: string | null;
+  placementOrderHash?: string | null;
+  closureClassification?: ClosureClassification | null;
+  roofAssemblyPreview?: RoofAssemblyPreview | null;
+  leftLowerConnectionState?: VisualConnectionState | 'UNCONNECTED' | null;
+  rightLowerConnectionState?: VisualConnectionState | 'UNCONNECTED' | null;
+  peakConnectionState?: VisualConnectionState | 'UNCONNECTED' | null;
+  leftSupportFoundationClassification?: SupportFoundationClassification | null;
+  rightSupportFoundationClassification?: SupportFoundationClassification | null;
+  balancedPieceAdjustments?: PartnerPieceAdjustment[];
+  initialJointPositionalError?: number | null;
+  initialJointAngularError?: number | null;
+  initialConstraintEnergy?: number | null;
+  initialJointStressDiagnostics?: InitialJointStressDiagnostic[];
+  peakJointForceDuringGravityTest?: number | null;
+  lowerJointForcesDuringGravityTest?: Record<string, number> | null;
+  jointBreakReason?: string | null;
+  foundationFailureReason?: string | null;
+  visualConnectionState?: VisualConnectionState | null;
+  visualJointCapType?: VisualJointCapType | null;
+  freeAdjustActive?: boolean;
+  fineAdjustmentOffsetPx?: Vector2 | null;
 }
 
 export interface Level1Results {
@@ -383,6 +846,10 @@ export interface Level1Results {
   jointsIntact?: number;
   jointsStrained?: number;
   jointsBroken?: number;
+  // Level 1 Three-Wisp & Variable Wisp Count Metadata
+  requiredWispCount?: number;
+  minimumStableWispsForCompletion?: number;
+  developerWispCountOverride?: number | null;
   // Construction Relevance & Baseline Telemetry
   constructionTelemetry?: ConstructionRelevanceTelemetry;
 }
@@ -401,8 +868,17 @@ export interface Vector2 {
 export interface MaterialConfig {
   type: MaterialType;
   name: string;
+  widthUnits: number;
+  heightUnits: number;
   width: number;
   height: number;
+  colliderWidth: number;
+  colliderHeight: number;
+  visualWidth: number;
+  visualHeight: number;
+  localOrigin: Vector2;
+  renderingScale: number;
+  jointCapable: boolean;
   density: number;
   friction: number;
   restitution: number;
@@ -416,6 +892,7 @@ export type SocketKind =
   | 'beam_side'
   | 'beam_corner'
   | 'block_edge'
+  | 'block_corner'
   | 'center'
   | 'anchor';
 
@@ -611,11 +1088,158 @@ export interface PlacedPiece {
   overrideCancellationReason?: string | null;
 }
 
+export type WispTendencyType = 'BRAVE' | 'EASILY_DISTRACTED' | 'SERIOUS' | 'NERVOUS' | 'CURIOUS';
+
+export type WispSilhouetteType = 'FLAME_CROWN' | 'BREEZE_SWIRL' | 'STONE_CORE' | 'DROPLET_HALO' | 'STAR_PRISM';
+
+export interface WispDefinition {
+  id: string;
+  name: string;
+  title: string;
+  element: 'ignis' | 'aer' | 'terra' | 'aqua' | 'aether';
+  personality: string;
+  tendency: WispTendencyType;
+  isHero: boolean;
+  silhouetteType: WispSilhouetteType;
+  crestShape: 'CROWN_CREST' | 'FEATHER_PLUME' | 'BASALT_HORNS' | 'TIDAL_FIN' | 'STAR_DIADEM';
+  armorShape: 'EMBER_MANTLE' | 'ZEPHYR_RIBBON' | 'GRANITE_GUARD' | 'RIPPLE_CAPE' | 'AETHER_RING';
+  idleSpeed: number;
+  idlePhaseOffset: number;
+  radius: number;
+  color: string;
+  glowColor: string;
+  expression: 'calm' | 'curious' | 'nervous' | 'happy';
+  defaultPosition: Vector2;
+}
+
+export interface ResultBandDefinition {
+  minStableWisps: number;
+  maxStableWisps: number;
+  classification: ResultClassification;
+  completionAwarded: boolean;
+}
+
+export interface LevelConfiguration {
+  levelId: string;
+  requiredWispCount: number;
+  availableWispDefinitions: WispDefinition[];
+  selectedWispIds: string[];
+  minimumStableWispsForCompletion: number;
+  resultBands: ResultBandDefinition[];
+  attackDefinitions: string[];
+  reinforcementSchedule: {
+    afterAttackIndex: number;
+    timerSec: number;
+    guaranteedDelivery: Partial<Record<MaterialType, number>>;
+  };
+  startingInventory: Record<MaterialType, number>;
+  prebuiltStructureId: string;
+  tutorialConfiguration: {
+    requiresBeam: boolean;
+    requiresBlock: boolean;
+    requiresSupportedConnection: boolean;
+    requiresStabilityTest: boolean;
+  };
+}
+
+export interface SnapshotWispMetadata {
+  levelId: string;
+  requiredWispCount: number;
+  activeWispIds: string[];
+  activeWispDefinitions: WispDefinition[];
+  committedWispPositions: Record<string, Vector2>;
+  wispStates: Array<{
+    id: string;
+    placed: boolean;
+    isValid: boolean;
+    isDispersed: boolean;
+    position: Vector2;
+  }>;
+  totalActiveWispCount: number;
+  currentPlacedWispCount: number;
+  resultBands: ResultBandDefinition[];
+  minimumStableWispsForCompletion: number;
+  developerWispCountOverride: number | null;
+}
+
+export interface DeveloperWispOverrideDiagnostics {
+  configuredLevelRequiredWispCount: number;
+  developerWispCountOverride: number | null;
+  activeRequiredWispCount: number;
+  activeWispIds: string[];
+  placedWispCount: number;
+  stagingWispCount: number;
+  minimumStableWispsForCompletion: number;
+  resultBands: ResultBandDefinition[];
+}
+
+export interface AttackBalanceTelemetry {
+  attackId: string;
+  attackerType: AttackerType;
+  selectedTargetId: string;
+  selectedTargetCategory: string;
+  bullseyeOverrideActive: boolean;
+  launchAngle: number;
+  launchSpeed: number;
+  firstImpactObjectId: string | null;
+  wispsRemainingAfterAttack: number;
+  wispContactEventsCount: number;
+  wispDispersalCauses: Record<string, string>;
+  intactPiecesRemaining: number;
+  crackedPiecesRemaining: number;
+  brokenPiecesRemaining: number;
+  lostPiecesRemaining: number;
+  activeJointsRemaining: number;
+  brokenJointsCount: number;
+}
+
+export interface AttemptBalanceTelemetry {
+  attemptId: string;
+  timestamp: number;
+  levelId: string;
+  activeWispCount: number;
+  activeWispIds: string[];
+  developerWispCountOverride: number | null;
+  initialPieceCount: number;
+  initialPlayerPiecesByMaterial: Record<MaterialType, number>;
+  initialJointCountByType: Record<string, number>;
+  wispPlacedPositions: Record<string, Vector2>;
+  wispProtectionClassification: Record<string, WispShelterStatus>;
+  sharedCollapseRiskClusters: number;
+  heavyOverheadRiskCount: number;
+  attack1TargetId: string | null;
+  attack1TargetCategory: string | null;
+  attack1FirstImpactId: string | null;
+  wispsStableAfterAttack1: number;
+  wispsDispersedAfterAttack1: number;
+  reinforcementPiecesPlaced: number;
+  reinforcementJointsCreated: number;
+  reserveUsedCount: number;
+  guaranteedDeliveryUsed: boolean;
+  bullseyeUsed: boolean;
+  attack2TargetId: string | null;
+  attack2TargetCategory: string | null;
+  attack2FirstImpactId: string | null;
+  finalWispsStable: number;
+  finalWispsDispersed: number;
+  finalResultBand: ResultClassification;
+  completionAwarded: boolean;
+  attacks: AttackBalanceTelemetry[];
+}
+
 export interface WispEntity {
   id: string;
   name: string;
   title: string;
   element: 'ignis' | 'aer' | 'terra' | 'aqua' | 'aether';
+  personality?: string;
+  tendency?: WispTendencyType;
+  isHero?: boolean;
+  silhouetteType?: WispSilhouetteType;
+  crestShape?: 'CROWN_CREST' | 'FEATHER_PLUME' | 'BASALT_HORNS' | 'TIDAL_FIN' | 'STAR_DIADEM';
+  armorShape?: 'EMBER_MANTLE' | 'ZEPHYR_RIBBON' | 'GRANITE_GUARD' | 'RIPPLE_CAPE' | 'AETHER_RING';
+  idleSpeed?: number;
+  idlePhaseOffset?: number;
   position: Vector2;
   defaultPosition?: Vector2;
   radius: number;
@@ -661,7 +1285,16 @@ export interface WispDragState {
 
 export interface LevelState {
   schemaVersion: number;
+  geometrySchemaVersion?: number;
   levelId: string;
+  requiredWispCount?: number;
+  activeWispIds?: string[];
+  minimumStableWispsForCompletion?: number;
+  resultBands?: ResultBandDefinition[];
+  developerWispCountOverride?: number | null;
+  snapshotMetadata?: SnapshotWispMetadata;
+  attemptId?: string;
+  resetGeneration?: number;
   pieces: PlacedPiece[];
   joints?: TimberJoint[];
   inventory: Record<MaterialType, number>;
@@ -674,23 +1307,40 @@ export interface LevelState {
     maxY: number;
   };
   lossBoundaryY: number;
+  migrationDiagnostics?: {
+    migratedFromGeometrySchema: number;
+    migratedToGeometrySchema: number;
+    preservedPieceCount: number;
+    preservedJointCount: number;
+    invalidMigratedJointCount: number;
+    removedJointIds: string[];
+    result: string;
+  } | null;
 }
 
 export type ConstructionAction =
   | {
       type: 'PLACE_PIECE';
+      operationId?: string;
       piece: PlacedPiece;
       fromDelivered?: boolean;
       createdJoints?: TimberJoint[];
+      partnerPieceMoves?: PartnerPieceAdjustment[];
+      beforeRevision?: number;
+      afterRevision?: number;
     }
   | {
       type: 'REMOVE_PIECE';
+      operationId?: string;
       piece: PlacedPiece;
       toDelivered?: boolean;
       removedJoints?: TimberJoint[];
+      beforeRevision?: number;
+      afterRevision?: number;
     }
   | {
       type: 'MOVE_PIECE';
+      operationId?: string;
       pieceId: string;
       beforePos: Vector2;
       beforeRot: number;
@@ -698,11 +1348,18 @@ export type ConstructionAction =
       afterPos: Vector2;
       afterRot: number;
       afterAnchorId?: string;
+      partnerPieceMoves?: PartnerPieceAdjustment[];
       beforeJoints?: TimberJoint[];
       afterJoints?: TimberJoint[];
+      removedJoints?: TimberJoint[];
+      preservedJoints?: TimberJoint[];
+      createdJoints?: TimberJoint[];
+      beforeRevision?: number;
+      afterRevision?: number;
     }
   | {
       type: 'ROTATE_PIECE';
+      operationId?: string;
       pieceId: string;
       beforeRotation: number;
       afterRotation: number;
@@ -710,11 +1367,27 @@ export type ConstructionAction =
       afterAnchorId?: string;
       beforeJoints?: TimberJoint[];
       afterJoints?: TimberJoint[];
+      removedJoints?: TimberJoint[];
+      preservedJoints?: TimberJoint[];
+      createdJoints?: TimberJoint[];
+      beforeRevision?: number;
+      afterRevision?: number;
     }
   | {
       type: 'DETACH_JOINT';
+      operationId?: string;
       pieceId: string;
       removedJoints: TimberJoint[];
+      beforeRevision?: number;
+      afterRevision?: number;
+    }
+  | {
+      type: 'BIND_JOINT';
+      operationId?: string;
+      pieceId: string;
+      createdJoints: TimberJoint[];
+      beforeRevision?: number;
+      afterRevision?: number;
     };
 
 export interface DragState {
@@ -749,6 +1422,13 @@ export interface DragState {
   supportedContactPredicted?: boolean;
   explicitJointProposed?: boolean;
   proposedTimberJoint?: ProposedTimberJoint | null;
+  proposedTimberJoints?: ProposedTimberJoint[];
+  preservedJoints?: TimberJoint[];
+  removedJoints?: TimberJoint[];
+  suspendedJoints?: TimberJoint[];
+  jointEditPreviewActive?: boolean;
+  lowerSupportsDetected?: boolean;
+  connectionTaxonomy?: ConnectionTaxonomyCategory;
   connectionCategory?:
     | 'TIMBER_JOINT'
     | 'ENVIRONMENTAL_ANCHOR'
@@ -767,6 +1447,31 @@ export interface DragState {
   playerFriendlyRejectionMessage?: string | null;
   overlapColliderId?: string | null;
   penetrationDepth?: number;
+  // Modular Construction, Corner Seat, Balanced Peak & Candidate Cycling Preview State
+  candidateCycleIndex?: number;
+  candidateCycleCount?: number;
+  availableCandidateLabels?: string[];
+  currentCandidateLabel?: string | null;
+  balancedAdjustmentActive?: boolean;
+  partnerPieceAdjustment?: PartnerPieceAdjustment | null;
+  partnerPieceAdjustments?: PartnerPieceAdjustment[];
+  roofSupportSummary?: RoofSupportDiagnosticSummary | null;
+  peakSymmetryDiagnostics?: PeakSymmetryDiagnostics | null;
+  sourceFeatureType?: 'socket' | 'face' | 'corner' | 'apex' | null;
+  sourceFeatureId?: string | null;
+  targetFeatureType?: 'socket' | 'face' | 'corner' | 'apex' | null;
+  targetFeatureId?: string | null;
+  seamSeparation?: number | null;
+  candidateRankingBreakdown?: CandidateRankingBreakdown | null;
+  // Forgiving Architectural Snap & Roof Assembly Closure State
+  closureClassification?: ClosureClassification | null;
+  canonicalRelationship?: CanonicalRelationshipDescription | null;
+  roofAssemblyPreview?: RoofAssemblyPreview | null;
+  visualConnectionState?: VisualConnectionState | null;
+  visualJointCapType?: VisualJointCapType | null;
+  playerFacingConnectionLabel?: string | null;
+  freeAdjustActive?: boolean;
+  fineAdjustmentOffsetPx?: Vector2 | null;
 }
 
 export interface StabilityReport {

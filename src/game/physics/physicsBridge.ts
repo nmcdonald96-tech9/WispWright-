@@ -301,9 +301,27 @@ export class PhysicsBridge {
         continue;
       }
 
-      const profile = TIMBER_JOINT_PROFILES[simJoint.strengthProfile];
+      const profile =
+        TIMBER_JOINT_PROFILES[simJoint.strengthProfile] ??
+        TIMBER_JOINT_PROFILES.standard_timber_joint;
       const worldOffsetA = Vec2.rotate(simJoint.localAnchorA, bodyA.angle);
       const worldOffsetB = Vec2.rotate(simJoint.localAnchorB, bodyB.angle);
+      const worldSocketA = Vec2.add(bodyA.position, worldOffsetA);
+      const worldSocketB = Vec2.add(bodyB.position, worldOffsetB);
+      const actualDist = Vec2.distance(worldSocketA, worldSocketB);
+      const posErr = Math.max(0, Math.abs(actualDist - simJoint.restSeparation));
+      const actualAngleDiff = bodyB.angle - bodyA.angle;
+      const angErr = Math.abs(
+        Math.atan2(
+          Math.sin(actualAngleDiff - simJoint.restAngle),
+          Math.cos(actualAngleDiff - simJoint.restAngle),
+        ),
+      );
+      simJoint.initialPositionalErrorPx = posErr < 1e-4 ? 0 : posErr;
+      simJoint.initialAngularErrorRad = angErr < 1e-4 ? 0 : angErr;
+      simJoint.initialConstraintEnergy =
+        simJoint.initialPositionalErrorPx * profile.linearCompliance +
+        simJoint.initialAngularErrorRad * profile.angularCompliance;
 
       const jointConstraint = Constraint.create({
         bodyA,
@@ -376,6 +394,42 @@ export class PhysicsBridge {
     this.diagnostics.strainedTimberJointCount = strainedCount;
     this.diagnostics.brokenTimberJointCount = brokenCount;
     this.diagnostics.constraintCount = Composite.allConstraints(this.engine.world).length;
+  }
+
+  private hasLowerSupportForRoofRafter(rafterPieceId: string, peakJointId: string): boolean {
+    if (this.anchorConstraintMap.has(rafterPieceId)) return true;
+
+    for (const j of this.timberJoints.values()) {
+      if (j.jointId === peakJointId || j.state === 'BROKEN') continue;
+      if (j.pieceAId === rafterPieceId || j.pieceBId === rafterPieceId) {
+        return true;
+      }
+    }
+
+    const body = this.pieceBodyMap.get(rafterPieceId);
+    if (!body) return false;
+
+    const endA = Vec2.add(body.position, Vec2.rotate({ x: -72, y: 0 }, body.angle));
+    const endB = Vec2.add(body.position, Vec2.rotate({ x: 72, y: 0 }, body.angle));
+    const lowerEnd = endA.y >= endB.y ? endA : endB;
+
+    if (lowerEnd.y >= WORLD_CONFIG.groundY - 22) {
+      return true;
+    }
+
+    for (const [otherId, otherBody] of this.pieceBodyMap.entries()) {
+      if (otherId === rafterPieceId) continue;
+      const cond = this.pieceConditions.get(otherId)?.condition ?? 'INTACT';
+      if (cond === 'BROKEN' || cond === 'LOST') continue;
+      if (otherBody.position.y < lowerEnd.y - 14) continue;
+      const dx = Math.abs(otherBody.position.x - lowerEnd.x);
+      const dy = Math.abs(otherBody.position.y - lowerEnd.y);
+      if (dx <= 60 && dy <= 55 && Math.hypot(otherBody.velocity.x, otherBody.velocity.y) < 3.0) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private breakTimberJoint(jointId: string, reason: string): void {
@@ -868,7 +922,9 @@ export class PhysicsBridge {
       if (joint.state === 'BROKEN') continue;
       if (joint.pieceAId !== pieceId && joint.pieceBId !== pieceId) continue;
 
-      const profile = TIMBER_JOINT_PROFILES[joint.strengthProfile];
+      const profile =
+        TIMBER_JOINT_PROFILES[joint.strengthProfile] ??
+        TIMBER_JOINT_PROFILES.standard_timber_joint;
       if (newCondition === 'BROKEN') {
         this.breakTimberJoint(jointId, 'CONNECTED_PIECE_BROKEN');
       } else if (impulse >= profile.breakImpulseThreshold) {
@@ -995,14 +1051,35 @@ export class PhysicsBridge {
       constraint.pointA = Vec2.rotate(joint.localAnchorA, bodyA.angle);
       constraint.pointB = Vec2.rotate(joint.localAnchorB, bodyB.angle);
 
-      const profile = TIMBER_JOINT_PROFILES[joint.strengthProfile];
+      const profile =
+        TIMBER_JOINT_PROFILES[joint.strengthProfile] ??
+        TIMBER_JOINT_PROFILES.standard_timber_joint;
+      const isRoofPeak =
+        joint.jointType === 'ROOF_PEAK' || joint.strengthProfile === 'ROOF_PEAK';
+      const hasBothLowerSupports = isRoofPeak
+        ? this.hasLowerSupportForRoofRafter(joint.pieceAId, jointId) &&
+          this.hasLowerSupportForRoofRafter(joint.pieceBId, jointId)
+        : true;
+      if (isRoofPeak) {
+        joint.lowerSupportsDetected = hasBothLowerSupports;
+      }
+
+      const effectiveAngularCompliance =
+        isRoofPeak && !hasBothLowerSupports
+          ? profile.angularCompliance * 0.18
+          : profile.angularCompliance;
+      const effectiveTorqueLimit =
+        isRoofPeak && !hasBothLowerSupports
+          ? profile.torqueLimit * 0.22
+          : profile.torqueLimit;
+
       const angleDiff = shortestSignedAngleDelta(bodyA.angle, bodyB.angle);
       const angErr = shortestSignedAngleDelta(joint.restAngle, angleDiff);
       const relAngVel = bodyB.angularVelocity - bodyA.angularVelocity;
-      const rawDeltaOmega = angErr * profile.angularCompliance - relAngVel * profile.damping;
+      const rawDeltaOmega = angErr * effectiveAngularCompliance - relAngVel * profile.damping;
       const clampedDeltaOmega = Math.max(
-        -profile.torqueLimit,
-        Math.min(profile.torqueLimit, rawDeltaOmega),
+        -effectiveTorqueLimit,
+        Math.min(effectiveTorqueLimit, rawDeltaOmega),
       );
       const invIA = Number.isFinite(bodyA.inertia) && bodyA.inertia > 0 ? 1 / bodyA.inertia : 0;
       const invIB = Number.isFinite(bodyB.inertia) && bodyB.inertia > 0 ? 1 / bodyB.inertia : 0;
@@ -1047,7 +1124,9 @@ export class PhysicsBridge {
         continue;
       }
 
-      const profile = TIMBER_JOINT_PROFILES[joint.strengthProfile];
+      const profile =
+        TIMBER_JOINT_PROFILES[joint.strengthProfile] ??
+        TIMBER_JOINT_PROFILES.standard_timber_joint;
       const worldSocketA = Vec2.add(bodyA.position, Vec2.rotate(joint.localAnchorA, bodyA.angle));
       const worldSocketB = Vec2.add(bodyB.position, Vec2.rotate(joint.localAnchorB, bodyB.angle));
       joint.worldPosition = {
@@ -1069,17 +1148,31 @@ export class PhysicsBridge {
         continue;
       }
 
-      // Continuous overload stress accumulation (cantilever / heavy stone load / sag)
+      const isRoofPeak =
+        joint.jointType === 'ROOF_PEAK' || joint.strengthProfile === 'ROOF_PEAK';
+      const hasBothLowerSupports = isRoofPeak
+        ? Boolean(joint.lowerSupportsDetected)
+        : true;
+
+      // Continuous overload stress accumulation (cantilever / heavy stone load / sag / roof spreading)
       const loadRatio = Math.max(stretch / 3.0, absAngErr / 0.13);
-      if (loadRatio > 0.35) {
-        joint.currentStress += (loadRatio - 0.30) * 0.45;
+      if (isRoofPeak && !hasBothLowerSupports && (absAngErr > 0.035 || stretch > 0.35)) {
+        joint.currentStress += absAngErr * 4.5 + stretch * 0.65;
+      } else if (loadRatio > 0.35) {
+        const rateMult = isRoofPeak && hasBothLowerSupports ? 0.55 : 1.0;
+        joint.currentStress += (loadRatio - 0.30) * 0.45 * rateMult;
       } else {
         joint.currentStress = Math.max(0, joint.currentStress - 0.12);
       }
       joint.maxStressObserved = Math.max(joint.maxStressObserved, joint.currentStress);
 
       if (joint.currentStress >= profile.accumulatedStressThreshold) {
-        this.breakTimberJoint(jointId, 'OVERLOAD_BENDING_SHEAR');
+        this.breakTimberJoint(
+          jointId,
+          isRoofPeak && !hasBothLowerSupports
+            ? 'ROOF_PEAK_UNSUPPORTED_SPREAD'
+            : 'OVERLOAD_BENDING_SHEAR',
+        );
         continue;
       }
 

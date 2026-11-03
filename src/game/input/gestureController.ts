@@ -4,7 +4,11 @@
  */
 
 import { soundSynth } from '../audio/synth';
-import { MATERIAL_CONFIGS } from '../config';
+import {
+  CONSTRUCTION_UNIT,
+  GEOMETRY_SCHEMA_VERSION,
+  MATERIAL_CONFIGS,
+} from '../config';
 import { createOBB, isPointInOBB } from '../math/geometry';
 import {
   CANDIDATE_LOCK_RELEASE_RADIUS,
@@ -130,8 +134,10 @@ export class GestureController {
   public activePositionalSnapCandidate: string | null = null;
   public activeRotationalSnapCandidate: string | null = null;
 
-  // Candidate lock hysteresis state
+  // Candidate lock hysteresis & cycling state
   public lockedCandidate: LockedSnapCandidate | null = null;
+  public candidateCycleIndex = 0;
+  public enableBalancedPeakAdjustment = true;
 
   // Inventory-Lift & Endpoint Snap Diagnostics State
   public inventoryLiftState: InventoryLiftState = 'IDLE';
@@ -225,7 +231,11 @@ export class GestureController {
           this.store.placePiece(
             newPiece,
             true,
-            this.snappingEnabled ? drag.proposedTimberJoint : null,
+            this.snappingEnabled
+              ? drag.proposedTimberJoints?.length
+                ? drag.proposedTimberJoints
+                : drag.proposedTimberJoint
+              : null,
           );
         } else if (drag.source === 'world' && drag.pieceId) {
           this.store.movePiece(
@@ -234,10 +244,15 @@ export class GestureController {
             drag.rotation,
             drag.activeSnap?.socket.anchorId,
             true,
-            this.snappingEnabled ? drag.proposedTimberJoint : null,
+            this.snappingEnabled
+              ? drag.proposedTimberJoints?.length
+                ? drag.proposedTimberJoints
+                : drag.proposedTimberJoint
+              : null,
           );
         }
       } else if (drag.source === 'world' && this.draggingPlacedPiece && this.originalPieceTransform) {
+        this.store.cancelJointEditTransaction('SAFETY_COMPLETE_TRANSITION');
         this.draggingPlacedPiece.position = { ...this.originalPieceTransform.pos };
         this.draggingPlacedPiece.rotation = this.originalPieceTransform.rot;
         this.draggingPlacedPiece.attachedAnchorId = this.originalPieceTransform.anchor;
@@ -256,6 +271,10 @@ export class GestureController {
   public cancelActiveDrag(reason = 'CANCELLED'): void {
     this.cancellationReason = reason;
 
+    if (this.store.activeJointEditTransaction) {
+      this.store.cancelJointEditTransaction(reason);
+    }
+
     if (this.renderer.dragState?.source === 'world' && this.draggingPlacedPiece && this.originalPieceTransform) {
       this.draggingPlacedPiece.position = { ...this.originalPieceTransform.pos };
       this.draggingPlacedPiece.rotation = this.originalPieceTransform.rot;
@@ -273,6 +292,7 @@ export class GestureController {
     this.activePointerInteractionType = 'NONE';
     this.inventoryLiftState = 'IDLE';
     this.lockedCandidate = null;
+    this.candidateCycleIndex = 0;
     this.ghostPresentationScale = 1.0;
     this.transitionProgress = 1.0;
     this.store.setActiveDragTutorialContext(null, this.snappingEnabled);
@@ -649,10 +669,12 @@ export class GestureController {
         preferredRotation: this.preferredRotation,
         rotationSource: this.rotationSource,
         acceptSnapRotation: this.snapRotationAccepted,
-        lockedCandidate: this.lockedCandidate,
+        lockedCandidate: this.candidateCycleIndex > 0 ? null : this.lockedCandidate,
         inInventoryTray: transition.inInventoryTray,
         wisps: this.store.getState().wisps,
         existingJoints: this.store.getJoints(),
+        candidateCycleIndex: this.candidateCycleIndex,
+        enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
       },
     );
 
@@ -704,12 +726,33 @@ export class GestureController {
       supportedContactPredicted: snap.supportedContactPredicted,
       explicitJointProposed: snap.explicitJointProposed,
       proposedTimberJoint: snap.proposedTimberJoint,
+      proposedTimberJoints: snap.proposedTimberJoints,
+      preservedJoints: snap.preservedJoints,
+      removedJoints: snap.removedJoints,
+      suspendedJoints: [],
+      jointEditPreviewActive: false,
+      lowerSupportsDetected: snap.lowerSupportsDetected,
       connectionCategory: snap.connectionCategory,
+      connectionTaxonomy: snap.connectionTaxonomy,
       overlapClassification: snap.overlapClassification,
       placementRejectionReason: snap.placementRejectionReason,
       playerFriendlyRejectionMessage: snap.playerFriendlyRejectionMessage,
       overlapColliderId: snap.overlapColliderId,
       penetrationDepth: snap.penetrationDepth,
+      candidateCycleIndex: snap.candidateCycleIndex,
+      candidateCycleCount: snap.candidateCycleCount,
+      availableCandidateLabels: snap.availableCandidateLabels,
+      currentCandidateLabel: snap.currentCandidateLabel,
+      balancedAdjustmentActive: snap.balancedAdjustmentActive,
+      partnerPieceAdjustment: snap.partnerPieceAdjustment,
+      roofSupportSummary: snap.roofSupportSummary,
+      peakSymmetryDiagnostics: snap.peakSymmetryDiagnostics,
+      sourceFeatureType: snap.sourceFeatureType,
+      sourceFeatureId: snap.sourceFeatureId,
+      targetFeatureType: snap.targetFeatureType,
+      targetFeatureId: snap.targetFeatureId,
+      seamSeparation: snap.seamSeparation,
+      candidateRankingBreakdown: snap.candidateRankingBreakdown,
     };
     this.renderer.touchContactWorldPos = touchWorld;
   }
@@ -741,6 +784,7 @@ export class GestureController {
     this.manualRotationRevision = 0;
     this.snapRotationAccepted = false;
     this.lockedCandidate = null;
+    this.candidateCycleIndex = 0;
     this.cancellationReason = null;
     this.inventoryDecrementCount = 0;
 
@@ -768,6 +812,8 @@ export class GestureController {
         lockedCandidate: this.lockedCandidate,
         wisps: this.store.getState().wisps,
         existingJoints: this.store.getJoints(),
+        candidateCycleIndex: this.candidateCycleIndex,
+        enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
       },
     );
 
@@ -813,12 +859,33 @@ export class GestureController {
       supportedContactPredicted: snap.supportedContactPredicted,
       explicitJointProposed: snap.explicitJointProposed,
       proposedTimberJoint: snap.proposedTimberJoint,
+      proposedTimberJoints: snap.proposedTimberJoints,
+      preservedJoints: snap.preservedJoints,
+      removedJoints: snap.removedJoints,
+      suspendedJoints: [],
+      jointEditPreviewActive: false,
+      lowerSupportsDetected: snap.lowerSupportsDetected,
       connectionCategory: snap.connectionCategory,
+      connectionTaxonomy: snap.connectionTaxonomy,
       overlapClassification: snap.overlapClassification,
       placementRejectionReason: snap.placementRejectionReason,
       playerFriendlyRejectionMessage: snap.playerFriendlyRejectionMessage,
       overlapColliderId: snap.overlapColliderId,
       penetrationDepth: snap.penetrationDepth,
+      candidateCycleIndex: snap.candidateCycleIndex,
+      candidateCycleCount: snap.candidateCycleCount,
+      availableCandidateLabels: snap.availableCandidateLabels,
+      currentCandidateLabel: snap.currentCandidateLabel,
+      balancedAdjustmentActive: snap.balancedAdjustmentActive,
+      partnerPieceAdjustment: snap.partnerPieceAdjustment,
+      roofSupportSummary: snap.roofSupportSummary,
+      peakSymmetryDiagnostics: snap.peakSymmetryDiagnostics,
+      sourceFeatureType: snap.sourceFeatureType,
+      sourceFeatureId: snap.sourceFeatureId,
+      targetFeatureType: snap.targetFeatureType,
+      targetFeatureId: snap.targetFeatureId,
+      seamSeparation: snap.seamSeparation,
+      candidateRankingBreakdown: snap.candidateRankingBreakdown,
     };
 
     this.tapPlacementMode = {
@@ -857,7 +924,11 @@ export class GestureController {
     const success = this.store.placePiece(
       newPiece,
       true,
-      this.snappingEnabled ? drag.proposedTimberJoint : null,
+      this.snappingEnabled
+        ? drag.proposedTimberJoints?.length
+          ? drag.proposedTimberJoints
+          : drag.proposedTimberJoint
+        : null,
     );
     if (success) {
       this.placementCommitCount++;
@@ -895,6 +966,7 @@ export class GestureController {
     this.manualRotationRevision++;
     this.snapRotationAccepted = false; // Suppress auto snap rotation after manual adjustment
     this.lockedCandidate = null; // Re-evaluate best socket for new orientation
+    this.candidateCycleIndex = 0;
 
     const drag = this.renderer.dragState;
     const snap = solveSnapAndValidation(
@@ -912,6 +984,8 @@ export class GestureController {
         lockedCandidate: null,
         wisps: this.store.getState().wisps,
         existingJoints: this.store.getJoints(),
+        candidateCycleIndex: this.candidateCycleIndex,
+        enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
       },
     );
 
@@ -954,12 +1028,31 @@ export class GestureController {
       supportedContactPredicted: snap.supportedContactPredicted,
       explicitJointProposed: snap.explicitJointProposed,
       proposedTimberJoint: snap.proposedTimberJoint,
+      proposedTimberJoints: snap.proposedTimberJoints,
+      preservedJoints: snap.preservedJoints,
+      removedJoints: snap.removedJoints,
+      lowerSupportsDetected: snap.lowerSupportsDetected,
       connectionCategory: snap.connectionCategory,
+      connectionTaxonomy: snap.connectionTaxonomy,
       overlapClassification: snap.overlapClassification,
       placementRejectionReason: snap.placementRejectionReason,
       playerFriendlyRejectionMessage: snap.playerFriendlyRejectionMessage,
       overlapColliderId: snap.overlapColliderId,
       penetrationDepth: snap.penetrationDepth,
+      candidateCycleIndex: snap.candidateCycleIndex,
+      candidateCycleCount: snap.candidateCycleCount,
+      availableCandidateLabels: snap.availableCandidateLabels,
+      currentCandidateLabel: snap.currentCandidateLabel,
+      balancedAdjustmentActive: snap.balancedAdjustmentActive,
+      partnerPieceAdjustment: snap.partnerPieceAdjustment,
+      roofSupportSummary: snap.roofSupportSummary,
+      peakSymmetryDiagnostics: snap.peakSymmetryDiagnostics,
+      sourceFeatureType: snap.sourceFeatureType,
+      sourceFeatureId: snap.sourceFeatureId,
+      targetFeatureType: snap.targetFeatureType,
+      targetFeatureId: snap.targetFeatureId,
+      seamSeparation: snap.seamSeparation,
+      candidateRankingBreakdown: snap.candidateRankingBreakdown,
     };
 
     if (this.tapPlacementMode) {
@@ -969,6 +1062,102 @@ export class GestureController {
     }
 
     soundSynth.playRotate();
+  }
+
+  /**
+   * Cycles among valid connection candidates when multiple connection options exist near the pointer.
+   */
+  public cycleSnapCandidate(): void {
+    const drag = this.renderer.dragState;
+    if (!drag) return;
+    this.candidateCycleIndex = (this.candidateCycleIndex + 1);
+    this.lockedCandidate = null;
+
+    const queryPos = this.pointerWorldCoords ?? drag.currentWorldPos;
+    const snap = solveSnapAndValidation(
+      drag.pieceType,
+      queryPos,
+      this.preferredRotation,
+      this.store.getState().pieces,
+      this.store.getState().anchors,
+      this.snappingEnabled,
+      drag.pieceId,
+      {
+        preferredRotation: this.preferredRotation,
+        rotationSource: this.rotationSource,
+        acceptSnapRotation: this.snapRotationAccepted,
+        lockedCandidate: null,
+        wisps: this.store.getState().wisps,
+        existingJoints: this.store.getJoints(),
+        candidateCycleIndex: this.candidateCycleIndex,
+        enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
+      },
+    );
+
+    this.candidateCycleIndex = snap.candidateCycleIndex ?? 0;
+    if (snap.snapped && snap.socket && snap.pieceSocket) {
+      this.lockedCandidate = {
+        targetSocketId: snap.socket.id,
+        pieceSocketId: snap.pieceSocket.id,
+      };
+    }
+
+    this.renderer.dragState = {
+      ...drag,
+      currentWorldPos: snap.position,
+      rotation: snap.rotation,
+      isValidPlacement: snap.isValid,
+      activeSnap:
+        snap.snapped && snap.socket
+          ? {
+              socket: snap.socket,
+              pieceSocket: snap.pieceSocket,
+              targetPos: snap.position,
+              targetAngle: snap.rotation,
+              proposedAngle: snap.proposedRotation,
+              requiresRotationChange: snap.requiresRotationChange,
+              isAnchorRequired: snap.isAnchorRequired,
+              compatibilityLabel: snap.socketCompatibility,
+              candidateDistance: snap.candidateDistance,
+              candidateLockActive: snap.candidateLockActive,
+            }
+          : undefined,
+      supportedContactPredicted: snap.supportedContactPredicted,
+      explicitJointProposed: snap.explicitJointProposed,
+      proposedTimberJoint: snap.proposedTimberJoint,
+      proposedTimberJoints: snap.proposedTimberJoints,
+      preservedJoints: snap.preservedJoints,
+      removedJoints: snap.removedJoints,
+      lowerSupportsDetected: snap.lowerSupportsDetected,
+      connectionCategory: snap.connectionCategory,
+      connectionTaxonomy: snap.connectionTaxonomy,
+      overlapClassification: snap.overlapClassification,
+      placementRejectionReason: snap.placementRejectionReason,
+      playerFriendlyRejectionMessage: snap.playerFriendlyRejectionMessage,
+      overlapColliderId: snap.overlapColliderId,
+      penetrationDepth: snap.penetrationDepth,
+      candidateCycleIndex: snap.candidateCycleIndex,
+      candidateCycleCount: snap.candidateCycleCount,
+      availableCandidateLabels: snap.availableCandidateLabels,
+      currentCandidateLabel: snap.currentCandidateLabel,
+      balancedAdjustmentActive: snap.balancedAdjustmentActive,
+      partnerPieceAdjustment: snap.partnerPieceAdjustment,
+      roofSupportSummary: snap.roofSupportSummary,
+      peakSymmetryDiagnostics: snap.peakSymmetryDiagnostics,
+      sourceFeatureType: snap.sourceFeatureType,
+      sourceFeatureId: snap.sourceFeatureId,
+      targetFeatureType: snap.targetFeatureType,
+      targetFeatureId: snap.targetFeatureId,
+      seamSeparation: snap.seamSeparation,
+      candidateRankingBreakdown: snap.candidateRankingBreakdown,
+    };
+
+    if (this.tapPlacementMode) {
+      this.tapPlacementMode.currentWorldPos = snap.position;
+      this.tapPlacementMode.isValid = snap.isValid;
+    }
+
+    soundSynth.playSnap();
   }
 
   /**
@@ -1000,6 +1189,8 @@ export class GestureController {
         lockedCandidate: this.lockedCandidate,
         wisps: this.store.getState().wisps,
         existingJoints: this.store.getJoints(),
+        candidateCycleIndex: this.candidateCycleIndex,
+        enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
       },
     );
 
@@ -1030,12 +1221,31 @@ export class GestureController {
       supportedContactPredicted: snap.supportedContactPredicted,
       explicitJointProposed: snap.explicitJointProposed,
       proposedTimberJoint: snap.proposedTimberJoint,
+      proposedTimberJoints: snap.proposedTimberJoints,
+      preservedJoints: snap.preservedJoints,
+      removedJoints: snap.removedJoints,
+      lowerSupportsDetected: snap.lowerSupportsDetected,
       connectionCategory: snap.connectionCategory,
+      connectionTaxonomy: snap.connectionTaxonomy,
       overlapClassification: snap.overlapClassification,
       placementRejectionReason: snap.placementRejectionReason,
       playerFriendlyRejectionMessage: snap.playerFriendlyRejectionMessage,
       overlapColliderId: snap.overlapColliderId,
       penetrationDepth: snap.penetrationDepth,
+      candidateCycleIndex: snap.candidateCycleIndex,
+      candidateCycleCount: snap.candidateCycleCount,
+      availableCandidateLabels: snap.availableCandidateLabels,
+      currentCandidateLabel: snap.currentCandidateLabel,
+      balancedAdjustmentActive: snap.balancedAdjustmentActive,
+      partnerPieceAdjustment: snap.partnerPieceAdjustment,
+      roofSupportSummary: snap.roofSupportSummary,
+      peakSymmetryDiagnostics: snap.peakSymmetryDiagnostics,
+      sourceFeatureType: snap.sourceFeatureType,
+      sourceFeatureId: snap.sourceFeatureId,
+      targetFeatureType: snap.targetFeatureType,
+      targetFeatureId: snap.targetFeatureId,
+      seamSeparation: snap.seamSeparation,
+      candidateRankingBreakdown: snap.candidateRankingBreakdown,
     };
 
     soundSynth.playRotate();
@@ -1087,15 +1297,20 @@ export class GestureController {
     return this.detachSelectedTimberJoint();
   }
 
-  public detachSelectedTimberJoint(): boolean {
+  public detachSelectedTimberJoint(jointId?: string): boolean {
     const selected = this.renderer.getSelectedPiece();
     if (!selected) return false;
-    const ok = this.store.detachTimberJoints(selected.id);
+    const ok = this.store.detachTimberJoints(selected.id, jointId);
     if (ok) {
       this.setTemporaryFeedback('Timber Joint detached — beam can now move or rotate freely.');
       soundSynth.playSnap();
     }
     return ok;
+  }
+
+  public cancelActiveJointEdit(): void {
+    this.cancelActiveDrag('USER_CANCELLED_JOINT_EDIT');
+    soundSynth.playSnap();
   }
 
   // =========================================================================
@@ -1143,9 +1358,11 @@ export class GestureController {
           preferredRotation: this.preferredRotation,
           rotationSource: this.rotationSource,
           acceptSnapRotation: this.snapRotationAccepted,
-          lockedCandidate: this.lockedCandidate,
+          lockedCandidate: this.candidateCycleIndex > 0 ? null : this.lockedCandidate,
           wisps: this.store.getState().wisps,
           existingJoints: this.store.getJoints(),
+          candidateCycleIndex: this.candidateCycleIndex,
+          enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
         },
       );
 
@@ -1185,12 +1402,31 @@ export class GestureController {
       this.renderer.dragState.supportedContactPredicted = snap.supportedContactPredicted;
       this.renderer.dragState.explicitJointProposed = snap.explicitJointProposed;
       this.renderer.dragState.proposedTimberJoint = snap.proposedTimberJoint;
+      this.renderer.dragState.proposedTimberJoints = snap.proposedTimberJoints;
+      this.renderer.dragState.preservedJoints = snap.preservedJoints;
+      this.renderer.dragState.removedJoints = snap.removedJoints;
+      this.renderer.dragState.lowerSupportsDetected = snap.lowerSupportsDetected;
       this.renderer.dragState.connectionCategory = snap.connectionCategory;
+      this.renderer.dragState.connectionTaxonomy = snap.connectionTaxonomy;
       this.renderer.dragState.overlapClassification = snap.overlapClassification;
       this.renderer.dragState.placementRejectionReason = snap.placementRejectionReason;
       this.renderer.dragState.playerFriendlyRejectionMessage = snap.playerFriendlyRejectionMessage;
       this.renderer.dragState.overlapColliderId = snap.overlapColliderId;
       this.renderer.dragState.penetrationDepth = snap.penetrationDepth;
+      this.renderer.dragState.candidateCycleIndex = snap.candidateCycleIndex;
+      this.renderer.dragState.candidateCycleCount = snap.candidateCycleCount;
+      this.renderer.dragState.availableCandidateLabels = snap.availableCandidateLabels;
+      this.renderer.dragState.currentCandidateLabel = snap.currentCandidateLabel;
+      this.renderer.dragState.balancedAdjustmentActive = snap.balancedAdjustmentActive;
+      this.renderer.dragState.partnerPieceAdjustment = snap.partnerPieceAdjustment;
+      this.renderer.dragState.roofSupportSummary = snap.roofSupportSummary;
+      this.renderer.dragState.peakSymmetryDiagnostics = snap.peakSymmetryDiagnostics;
+      this.renderer.dragState.sourceFeatureType = snap.sourceFeatureType;
+      this.renderer.dragState.sourceFeatureId = snap.sourceFeatureId;
+      this.renderer.dragState.targetFeatureType = snap.targetFeatureType;
+      this.renderer.dragState.targetFeatureId = snap.targetFeatureId;
+      this.renderer.dragState.seamSeparation = snap.seamSeparation;
+      this.renderer.dragState.candidateRankingBreakdown = snap.candidateRankingBreakdown;
 
       this.tapPlacementMode.currentWorldPos = snap.position;
       this.tapPlacementMode.isValid = snap.isValid;
@@ -1419,6 +1655,9 @@ export class GestureController {
         this.cameraMovementSuppressedDuringDrag = true;
         this.renderer.camera.isUserInteracting = true;
 
+        // Automatically enter transactional JOINT_EDIT_PREVIEW without requiring manual detachment
+        this.store.beginJointEditTransaction(piece.id);
+
         this.preferredRotation = piece.preferredRotation ?? piece.rotation;
         this.currentRotation = piece.rotation;
         this.rotationSource = piece.rotationSource ?? 'USER';
@@ -1458,9 +1697,11 @@ export class GestureController {
           preferredRotation: this.preferredRotation,
           rotationSource: this.rotationSource,
           acceptSnapRotation: this.snapRotationAccepted,
-          lockedCandidate: this.lockedCandidate,
+          lockedCandidate: this.candidateCycleIndex > 0 ? null : this.lockedCandidate,
           wisps: this.store.getState().wisps,
           existingJoints: this.store.getJoints(),
+          candidateCycleIndex: this.candidateCycleIndex,
+          enableBalancedPeakAdjustment: this.enableBalancedPeakAdjustment,
         },
       );
 
@@ -1478,6 +1719,9 @@ export class GestureController {
       this.activePositionalSnapCandidate = snap.socket?.id ?? null;
       this.activeRotationalSnapCandidate = snap.requiresRotationChange ? snap.socket?.id ?? null : null;
       this.lastSnapRejectionReason = snap.lastSnapRejectionReason ?? null;
+
+      const suspendedJoints =
+        this.store.activeJointEditTransaction?.affectedJoints ?? [];
 
       this.renderer.dragState = {
         source: 'world',
@@ -1512,12 +1756,33 @@ export class GestureController {
         supportedContactPredicted: snap.supportedContactPredicted,
         explicitJointProposed: snap.explicitJointProposed,
         proposedTimberJoint: snap.proposedTimberJoint,
+        proposedTimberJoints: snap.proposedTimberJoints,
+        preservedJoints: snap.preservedJoints,
+        removedJoints: snap.removedJoints,
+        suspendedJoints,
+        jointEditPreviewActive: true,
+        lowerSupportsDetected: snap.lowerSupportsDetected,
         connectionCategory: snap.connectionCategory,
+        connectionTaxonomy: snap.connectionTaxonomy,
         overlapClassification: snap.overlapClassification,
         placementRejectionReason: snap.placementRejectionReason,
         playerFriendlyRejectionMessage: snap.playerFriendlyRejectionMessage,
         overlapColliderId: snap.overlapColliderId,
         penetrationDepth: snap.penetrationDepth,
+        candidateCycleIndex: snap.candidateCycleIndex,
+        candidateCycleCount: snap.candidateCycleCount,
+        availableCandidateLabels: snap.availableCandidateLabels,
+        currentCandidateLabel: snap.currentCandidateLabel,
+        balancedAdjustmentActive: snap.balancedAdjustmentActive,
+        partnerPieceAdjustment: snap.partnerPieceAdjustment,
+        roofSupportSummary: snap.roofSupportSummary,
+        peakSymmetryDiagnostics: snap.peakSymmetryDiagnostics,
+        sourceFeatureType: snap.sourceFeatureType,
+        sourceFeatureId: snap.sourceFeatureId,
+        targetFeatureType: snap.targetFeatureType,
+        targetFeatureId: snap.targetFeatureId,
+        seamSeparation: snap.seamSeparation,
+        candidateRankingBreakdown: snap.candidateRankingBreakdown,
       };
       this.renderer.touchContactWorldPos = touchWorld;
       return;
@@ -1638,7 +1903,11 @@ export class GestureController {
         const success = this.store.placePiece(
           newPiece,
           true,
-          this.snappingEnabled ? drag.proposedTimberJoint : null,
+          this.snappingEnabled
+            ? drag.proposedTimberJoints?.length
+              ? drag.proposedTimberJoints
+              : drag.proposedTimberJoint
+            : null,
         );
         if (success) {
           this.placementCommitCount++;
@@ -1682,19 +1951,27 @@ export class GestureController {
             drag.rotation,
             drag.activeSnap?.socket.anchorId,
             true,
-            this.snappingEnabled ? drag.proposedTimberJoint : null,
+            this.snappingEnabled
+              ? drag.proposedTimberJoints?.length
+                ? drag.proposedTimberJoints
+                : drag.proposedTimberJoint
+              : null,
           );
           if (moved) {
             soundSynth.playPlace(drag.pieceType);
-          } else if (this.draggingPlacedPiece && this.originalPieceTransform) {
-            this.draggingPlacedPiece.position = { ...this.originalPieceTransform.pos };
-            this.draggingPlacedPiece.rotation = this.originalPieceTransform.rot;
-            this.draggingPlacedPiece.attachedAnchorId = this.originalPieceTransform.anchor;
+          } else {
+            this.store.cancelJointEditTransaction('MOVE_REJECTED');
+            if (this.draggingPlacedPiece && this.originalPieceTransform) {
+              this.draggingPlacedPiece.position = { ...this.originalPieceTransform.pos };
+              this.draggingPlacedPiece.rotation = this.originalPieceTransform.rot;
+              this.draggingPlacedPiece.attachedAnchorId = this.originalPieceTransform.anchor;
+            }
           }
         } else {
           if (drag.playerFriendlyRejectionMessage) {
             this.setTemporaryFeedback(drag.playerFriendlyRejectionMessage);
           }
+          this.store.cancelJointEditTransaction('INVALID_RELEASE_LOCATION');
           if (this.draggingPlacedPiece && this.originalPieceTransform) {
             this.draggingPlacedPiece.position = { ...this.originalPieceTransform.pos };
             this.draggingPlacedPiece.rotation = this.originalPieceTransform.rot;
@@ -1844,6 +2121,51 @@ export class GestureController {
           drag?.playerFriendlyRejectionMessage ??
           this.statusFeedback ??
           null,
+        jointEditPreviewActive: Boolean(
+          drag?.jointEditPreviewActive || this.store.activeJointEditTransaction,
+        ),
+        suspendedJointIds: (
+          drag?.suspendedJoints ??
+          this.store.activeJointEditTransaction?.affectedJoints ??
+          []
+        ).map((j) => j.jointId),
+        preservedJointIds: (drag?.preservedJoints ?? []).map((j) => j.jointId),
+        removedJointIds: (drag?.removedJoints ?? []).map((j) => j.jointId),
+        createdJointIds: (
+          drag?.proposedTimberJoints ??
+          (drag?.proposedTimberJoint ? [drag.proposedTimberJoint] : [])
+        ).map((p) => `${p.sourceSocketName}->${p.targetPieceId}:${p.targetSocketName}`),
+        activeSourceFaceId:
+          drag?.proposedTimberJoint?.sourceFaceId ?? activeSnap?.pieceSocket?.localName ?? null,
+        activeTargetFaceId:
+          drag?.proposedTimberJoint?.targetFaceId ?? activeSnap?.socket?.localName ?? null,
+        faceContactNormal: activeSnap?.socket?.normal ?? null,
+        connectionTaxonomy: drag?.connectionTaxonomy ?? 'FREE_CONTACT',
+        roofPeakDetected: Boolean(
+          drag?.connectionTaxonomy === 'ROOF_PEAK' ||
+            drag?.proposedTimberJoint?.jointType === 'ROOF_PEAK',
+        ),
+        roofPeakLowerSupportsDetected: Boolean(
+          drag?.lowerSupportsDetected ?? drag?.proposedTimberJoint?.lowerSupportsDetected,
+        ),
+        diagonalBraceDetected: Boolean(
+          drag?.connectionTaxonomy === 'DIAGONAL_BRACE' ||
+            drag?.proposedTimberJoint?.jointType === 'DIAGONAL_BRACE',
+        ),
+        baseConstructionUnit: CONSTRUCTION_UNIT,
+        geometrySchemaVersion: GEOMETRY_SCHEMA_VERSION,
+        sourceFeatureType: drag?.sourceFeatureType ?? null,
+        sourceFeatureId: drag?.sourceFeatureId ?? null,
+        targetFeatureType: drag?.targetFeatureType ?? null,
+        targetFeatureId: drag?.targetFeatureId ?? null,
+        seamSeparation: drag?.seamSeparation ?? null,
+        candidateCycleIndex: drag?.candidateCycleIndex ?? this.candidateCycleIndex,
+        candidateCycleCount: drag?.candidateCycleCount ?? 0,
+        availableCandidateLabels: drag?.availableCandidateLabels ?? [],
+        currentCandidateLabel: drag?.currentCandidateLabel ?? null,
+        candidateRankingBreakdown: drag?.candidateRankingBreakdown ?? null,
+        peakSymmetryDiagnostics: drag?.peakSymmetryDiagnostics ?? null,
+        roofSupportSummary: drag?.roofSupportSummary ?? null,
       },
     };
   }

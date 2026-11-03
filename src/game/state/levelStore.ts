@@ -4,9 +4,21 @@
  */
 
 import {
+  buildResultBandsForWispCount,
+  createWispEntityFromDefinition,
+  createWispsForConfiguration,
+  GEOMETRY_SCHEMA_VERSION,
+  getMinimumStableWispsForCompletion,
+  getSelectedWispIdsForCount,
   INITIAL_LEVEL_STATE,
+  LEVEL_1_CONFIG,
   MATERIAL_CONFIGS,
+  PIECE_DEFINITIONS,
+  resolveBindingStrengthProfile,
+  resolveConnectionSubtype,
+  resolveMaterialPairProfileId,
   TIMBER_JOINT_CONFIG,
+  WISP_ROSTER_DEFINITIONS,
   WORLD_CONFIG,
 } from '../config';
 import {
@@ -14,8 +26,14 @@ import {
   createOBB,
   getOBBFromPiece,
   getOBBPenetrationDepth,
+  getPieceCorners,
+  getPieceSnapSockets,
   Vec2,
 } from '../math/geometry';
+import {
+  deriveStressFreeJointGeometryFromCommittedTransforms,
+  getVisualJointCapType,
+} from '../math/modularJointSolver';
 import {
   checkPieceOverlapsWisps,
   evaluateWispProtectionAndRisks,
@@ -25,6 +43,8 @@ import {
 } from '../math/wispPlacement';
 import {
   buildTimberJointId,
+  evaluateJointsForPieceTransform,
+  findManualBindCandidatesForPiece,
   shortestSignedAngleDelta,
   validatePieceRotationTransaction,
 } from '../math/snapSolver';
@@ -33,22 +53,31 @@ import {
   BullseyeInventoryStatus,
   BullseyeLogicalState,
   ConstructionAction,
+  DeveloperWispOverrideDiagnostics,
   GameMode,
   GuidedTutorialStep,
   InventoryCategory,
+  JointEditTransactionSnapshot,
   Level1Results,
+  LevelConfiguration,
   LevelState,
   MaterialType,
+  PartnerPieceAdjustment,
   PlacedPiece,
   ProposedTimberJoint,
+  ResultBandDefinition,
   RotationValidationDiagnostics,
   SnapshotType,
+  SnapshotWispMetadata,
   SuggestedPlacementRegion,
   TimberJoint,
+  TimberJointType,
   TutorialChecklistState,
   TutorialHighlightTargetId,
   UnlockState,
   Vector2,
+  WispDefinition,
+  WispEntity,
   WispPlacementDiagnostics,
   WispPlacementPhase,
   WispPresenceDiagnostics,
@@ -86,6 +115,10 @@ export interface SavedSessionMeta {
   currentGuidedStep?: GuidedTutorialStep;
   wispPlacementPhase?: WispPlacementPhase;
   wispsRequiredBeforeSiege?: boolean;
+  developerWispCountOverride?: number | null;
+  activeAttemptId?: string;
+  resetGeneration?: number;
+  isAttemptCompleted?: boolean;
 }
 
 function deepClone<T>(obj: T): T {
@@ -124,6 +157,10 @@ export class LevelStore {
     message: string | null;
   } | null = null;
   public lastWispPlacementDiagnostics: WispPlacementDiagnostics | null = null;
+  public developerWispCountOverride: number | null = null;
+  public activeAttemptId: string = `attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  public resetGeneration: number = 1;
+  public isAttemptCompleted: boolean = false;
 
   // Guaranteed Mentor Delivery tracking
   public deliveryGranted = false;
@@ -174,9 +211,434 @@ export class LevelStore {
     this.state = this.loadFromStorage();
     this.loadUnlockState();
     this.loadSessionMeta();
+    this.state = this.migratePersistedLevelState(this.state);
     this.normalizeBuildPhaseWisps();
     this.validatePersistedTutorialAgainstDesign();
     this.recomputeAllWispProtection();
+    this.state.snapshotMetadata = this.buildSnapshotWispMetadata(this.state);
+    if (this.snapshots.LEVEL_TEMPLATE) {
+      this.snapshots.LEVEL_TEMPLATE = this.migratePersistedLevelState(this.snapshots.LEVEL_TEMPLATE);
+    }
+    // Authoritative Startup / Recovery Precedence:
+    // If the persisted session ended in RESULTS / SEQUENCE_COMPLETE / UNLOCK_PRESENTATION,
+    // or if the attempt was completed, subsequent application launch begins from the
+    // authoritative fresh Level 1 template in BUILD phase without damaged structure.
+    if (
+      this.isAttemptCompleted ||
+      this.savedPhase === 'RESULTS' ||
+      this.savedPhase === 'SEQUENCE_COMPLETE' ||
+      this.savedPhase === 'UNLOCK_PRESENTATION'
+    ) {
+      this.resetLevel();
+    }
+  }
+
+  public getLevelConfiguration(): LevelConfiguration {
+    const activeCount = this.getRequiredWispCount(this.state);
+    const selectedIds =
+      this.developerWispCountOverride !== null
+        ? getSelectedWispIdsForCount(activeCount)
+        : [...LEVEL_1_CONFIG.selectedWispIds];
+    return {
+      ...LEVEL_1_CONFIG,
+      requiredWispCount: activeCount,
+      selectedWispIds: selectedIds,
+      minimumStableWispsForCompletion: getMinimumStableWispsForCompletion(activeCount),
+      resultBands: buildResultBandsForWispCount(activeCount),
+    };
+  }
+
+  public getRequiredWispCount(customState?: LevelState): number {
+    const target = customState ?? this.state;
+    if (
+      typeof target?.developerWispCountOverride === 'number' &&
+      target.developerWispCountOverride >= 1 &&
+      target.developerWispCountOverride <= 5
+    ) {
+      return target.developerWispCountOverride;
+    }
+    if (
+      typeof this.developerWispCountOverride === 'number' &&
+      this.developerWispCountOverride >= 1 &&
+      this.developerWispCountOverride <= 5
+    ) {
+      return this.developerWispCountOverride;
+    }
+    if (typeof target?.requiredWispCount === 'number' && target.requiredWispCount >= 1) {
+      return target.requiredWispCount;
+    }
+    return LEVEL_1_CONFIG.requiredWispCount;
+  }
+
+  public getMinimumStableWispsForCompletion(customState?: LevelState): number {
+    const target = customState ?? this.state;
+    const count = this.getRequiredWispCount(target);
+    return target?.minimumStableWispsForCompletion ?? getMinimumStableWispsForCompletion(count);
+  }
+
+  public getResultBands(customState?: LevelState): ResultBandDefinition[] {
+    const target = customState ?? this.state;
+    const count = this.getRequiredWispCount(target);
+    if (target?.resultBands && target.resultBands.length > 0) {
+      return target.resultBands;
+    }
+    return buildResultBandsForWispCount(count);
+  }
+
+  public getActiveWispDefinitions(customState?: LevelState): WispDefinition[] {
+    const target = customState ?? this.state;
+    return target.wisps.map((w) => {
+      const rosterDef = WISP_ROSTER_DEFINITIONS.find((d) => d.id === w.id);
+      if (rosterDef) return { ...rosterDef };
+      return {
+        id: w.id,
+        name: w.name,
+        title: w.title,
+        element: w.element,
+        personality: w.personality ?? 'Calm',
+        tendency: w.tendency ?? 'CURIOUS',
+        isHero: Boolean(w.isHero),
+        silhouetteType: w.silhouetteType ?? 'FLAME_CROWN',
+        crestShape: w.crestShape ?? 'CROWN_CREST',
+        armorShape: w.armorShape ?? 'EMBER_MANTLE',
+        idleSpeed: w.idleSpeed ?? 1.0,
+        idlePhaseOffset: w.idlePhaseOffset ?? 0,
+        radius: w.radius,
+        color: w.color,
+        glowColor: w.glowColor,
+        expression: w.expression,
+        defaultPosition: { ...(w.defaultPosition ?? w.position) },
+      };
+    });
+  }
+
+  public buildSnapshotWispMetadata(customState?: LevelState): SnapshotWispMetadata {
+    const target = customState ?? this.state;
+    const requiredCount = this.getRequiredWispCount(target);
+    const activeWispIds = target.wisps.map((w) => w.id);
+    const committedWispPositions: Record<string, Vector2> = {};
+    for (const w of target.wisps) {
+      if (w.placed === true) {
+        committedWispPositions[w.id] = { ...w.position };
+      }
+    }
+    return {
+      levelId: target.levelId,
+      requiredWispCount: requiredCount,
+      activeWispIds,
+      activeWispDefinitions: this.getActiveWispDefinitions(target),
+      committedWispPositions,
+      wispStates: target.wisps.map((w) => ({
+        id: w.id,
+        placed: w.placed === true,
+        isValid: w.isValid === true,
+        isDispersed: w.isDispersed === true,
+        position: { ...w.position },
+      })),
+      totalActiveWispCount: target.wisps.length,
+      currentPlacedWispCount: target.wisps.filter((w) => w.placed === true).length,
+      resultBands: this.getResultBands(target).map((b) => ({ ...b })),
+      minimumStableWispsForCompletion: this.getMinimumStableWispsForCompletion(target),
+      developerWispCountOverride:
+        target.developerWispCountOverride ?? this.developerWispCountOverride ?? null,
+    };
+  }
+
+  public setDeveloperWispCountOverride(count: 1 | 2 | 3 | 4 | 5 | null): void {
+    const validOverride =
+      typeof count === 'number' && count >= 1 && count <= 5 ? Math.round(count) : null;
+    this.developerWispCountOverride = validOverride;
+    const activeCount = validOverride ?? LEVEL_1_CONFIG.requiredWispCount;
+    const selectedIds =
+      validOverride !== null
+        ? getSelectedWispIdsForCount(activeCount)
+        : [...LEVEL_1_CONFIG.selectedWispIds];
+
+    const existingById = new Map<string, WispEntity>();
+    for (const w of this.state.wisps) {
+      if (!existingById.has(w.id)) {
+        existingById.set(w.id, deepClone(w));
+      }
+    }
+
+    const nextWisps: WispEntity[] = [];
+    for (const id of selectedIds) {
+      const def = WISP_ROSTER_DEFINITIONS.find((d) => d.id === id);
+      const existing = existingById.get(id);
+      if (existing && def) {
+        nextWisps.push({
+          ...createWispEntityFromDefinition(def),
+          ...existing,
+          defaultPosition: { ...(existing.defaultPosition ?? def.defaultPosition) },
+        });
+      } else if (def) {
+        nextWisps.push(createWispEntityFromDefinition(def));
+      }
+    }
+
+    this.state.wisps = nextWisps;
+    this.state.requiredWispCount = activeCount;
+    this.state.activeWispIds = [...selectedIds];
+    this.state.minimumStableWispsForCompletion = getMinimumStableWispsForCompletion(activeCount);
+    this.state.resultBands = buildResultBandsForWispCount(activeCount);
+    this.state.developerWispCountOverride = validOverride;
+
+    this.normalizeBuildPhaseWisps();
+    this.recomputeAllWispProtection();
+    this.state.snapshotMetadata = this.buildSnapshotWispMetadata(this.state);
+
+    // Keep LEVEL_TEMPLATE and active design snapshots synchronized with the active wisp count
+    const templateClone = deepClone(INITIAL_LEVEL_STATE);
+    templateClone.wisps = createWispsForConfiguration(selectedIds);
+    templateClone.requiredWispCount = activeCount;
+    templateClone.activeWispIds = [...selectedIds];
+    templateClone.minimumStableWispsForCompletion = getMinimumStableWispsForCompletion(activeCount);
+    templateClone.resultBands = buildResultBandsForWispCount(activeCount);
+    templateClone.developerWispCountOverride = validOverride;
+    templateClone.snapshotMetadata = this.buildSnapshotWispMetadata(templateClone);
+    this.snapshots.LEVEL_TEMPLATE = templateClone;
+
+    if (this.snapshots.STABLE_BUILD) {
+      this.snapshots.STABLE_BUILD = this.migratePersistedLevelState(this.snapshots.STABLE_BUILD);
+    }
+    if (this.snapshots.INITIAL_DESIGN) {
+      this.snapshots.INITIAL_DESIGN = this.migratePersistedLevelState(this.snapshots.INITIAL_DESIGN);
+    }
+    if (this.snapshots.PRE_SIEGE_WISPS) {
+      this.snapshots.PRE_SIEGE_WISPS = this.migratePersistedLevelState(this.snapshots.PRE_SIEGE_WISPS);
+    }
+
+    this.notify();
+  }
+
+  public getDeveloperWispOverrideDiagnostics(): DeveloperWispOverrideDiagnostics {
+    const activeCount = this.getRequiredWispCount(this.state);
+    const placedCount = this.state.wisps.filter((w) => w.placed === true && !w.isDispersed).length;
+    const stagingCount = this.state.wisps.filter((w) => w.placed !== true).length;
+    return {
+      configuredLevelRequiredWispCount: LEVEL_1_CONFIG.requiredWispCount,
+      developerWispCountOverride: this.developerWispCountOverride,
+      activeRequiredWispCount: activeCount,
+      activeWispIds: this.state.wisps.map((w) => w.id),
+      placedWispCount: placedCount,
+      stagingWispCount: stagingCount,
+      minimumStableWispsForCompletion: this.getMinimumStableWispsForCompletion(this.state),
+      resultBands: this.getResultBands(this.state).map((b) => ({ ...b })),
+    };
+  }
+
+  public lastGeometryMigrationDiagnostics: {
+    migratedFromGeometrySchema: number;
+    migratedToGeometrySchema: number;
+    preservedPieceCount: number;
+    preservedJointCount: number;
+    invalidMigratedJointCount: number;
+    removedJointIds: string[];
+    result: 'CURRENT' | 'MIGRATED_CLEAN' | 'MIGRATED_WITH_JOINT_CLEANUP';
+  } = {
+    migratedFromGeometrySchema: GEOMETRY_SCHEMA_VERSION,
+    migratedToGeometrySchema: GEOMETRY_SCHEMA_VERSION,
+    preservedPieceCount: INITIAL_LEVEL_STATE.pieces.length,
+    preservedJointCount: 0,
+    invalidMigratedJointCount: 0,
+    removedJointIds: [],
+    result: 'CURRENT',
+  };
+
+  public migratePersistedLevelState(rawState: LevelState): LevelState {
+    const state = deepClone(rawState);
+    const fromGeometrySchema =
+      typeof state.geometrySchemaVersion === 'number'
+        ? state.geometrySchemaVersion
+        : 1;
+
+    const overrideCount =
+      typeof state.developerWispCountOverride === 'number' &&
+      state.developerWispCountOverride >= 1 &&
+      state.developerWispCountOverride <= 5
+        ? state.developerWispCountOverride
+        : this.developerWispCountOverride;
+    const targetCount = overrideCount ?? LEVEL_1_CONFIG.requiredWispCount;
+    const targetIds =
+      overrideCount !== null
+        ? getSelectedWispIdsForCount(targetCount)
+        : [...LEVEL_1_CONFIG.selectedWispIds];
+
+    const existingMap = new Map<string, WispEntity>();
+    if (Array.isArray(state.wisps)) {
+      for (const w of state.wisps) {
+        if (w && typeof w.id === 'string' && !existingMap.has(w.id)) {
+          existingMap.set(w.id, w);
+        }
+      }
+    }
+
+    const migratedWisps: WispEntity[] = [];
+    for (const id of targetIds) {
+      const def = WISP_ROSTER_DEFINITIONS.find((d) => d.id === id);
+      if (!def) continue;
+      const baseEntity = createWispEntityFromDefinition(def);
+      const oldWisp = existingMap.get(id);
+      if (oldWisp) {
+        const merged: WispEntity = {
+          ...baseEntity,
+          position: oldWisp.position ? { ...oldWisp.position } : { ...def.defaultPosition },
+          defaultPosition: { ...def.defaultPosition },
+          placed: Boolean(oldWisp.placed),
+          isValid: Boolean(oldWisp.isValid),
+          isDispersed: Boolean(oldWisp.isDispersed),
+          dispersalTime: oldWisp.dispersalTime,
+        };
+        migratedWisps.push(merged);
+      } else {
+        migratedWisps.push(baseEntity);
+      }
+    }
+
+    // Recompute OBBs and revalidate existing joints if migrating from legacy geometry (< 3)
+    const removedJointIds: string[] = [];
+    if (fromGeometrySchema < GEOMETRY_SCHEMA_VERSION) {
+      // Recompute OBBs and revalidate existing joints under new 144x24 beam / 48x48 block geometry
+      if (Array.isArray(state.joints) && state.joints.length > 0) {
+        const validJoints: TimberJoint[] = [];
+        for (const j of state.joints) {
+          if (!j || j.state === 'BROKEN') {
+            if (j) validJoints.push(j);
+            continue;
+          }
+          const pieceA = state.pieces.find(
+            (p) => p.id === j.pieceAId && p.condition !== 'LOST' && p.condition !== 'BROKEN',
+          );
+          const pieceB = state.pieces.find(
+            (p) => p.id === j.pieceBId && p.condition !== 'LOST' && p.condition !== 'BROKEN',
+          );
+          if (!pieceA || !pieceB) {
+            if (j?.jointId) removedJointIds.push(j.jointId);
+            continue;
+          }
+
+          const obbA = getOBBFromPiece(pieceA);
+          const obbB = getOBBFromPiece(pieceB);
+          const pen = getOBBPenetrationDepth(obbA, obbB, 2.5);
+          if (pen > 4.0) {
+            // Severe interior body overlap after geometry migration -> remove invalid joint while preserving both pieces
+            removedJointIds.push(j.jointId);
+            continue;
+          }
+
+          const socksA = getPieceSnapSockets(pieceA);
+          const socksB = getPieceSnapSockets(pieceB);
+          const cornersA = getPieceCorners(pieceA);
+          const cornersB = getPieceCorners(pieceB);
+
+          const sockA = socksA.find(
+            (s) => s.id === j.socketAId || (s.localName && j.socketAId.endsWith(s.localName)),
+          );
+          const sockB = socksB.find(
+            (s) => s.id === j.socketBId || (s.localName && j.socketBId.endsWith(s.localName)),
+          );
+
+          let minDist =
+            sockA && sockB ? Vec2.distance(sockA.worldPos, sockB.worldPos) : Infinity;
+          for (const ca of cornersA) {
+            for (const cb of cornersB) {
+              const d = Vec2.distance(ca.worldPos, cb.worldPos);
+              if (d < minDist) minDist = d;
+            }
+            if (sockB) {
+              const d = Vec2.distance(ca.worldPos, sockB.worldPos);
+              if (d < minDist) minDist = d;
+            }
+          }
+          if (sockA) {
+            for (const cb of cornersB) {
+              const d = Vec2.distance(sockA.worldPos, cb.worldPos);
+              if (d < minDist) minDist = d;
+            }
+          }
+
+          if (minDist <= TIMBER_JOINT_CONFIG.maxAngledSocketClearance + 8.0) {
+            if (sockA?.localPos) j.localAnchorA = { ...sockA.localPos };
+            if (sockB?.localPos) j.localAnchorB = { ...sockB.localPos };
+            if (sockA && sockB) {
+              j.worldPosition = Vec2.scale(Vec2.add(sockA.worldPos, sockB.worldPos), 0.5);
+            }
+            const derived = deriveStressFreeJointGeometryFromCommittedTransforms(j, pieceA, pieceB);
+            if (sockA?.localPos) derived.localAnchorA = { ...sockA.localPos };
+            if (sockB?.localPos) derived.localAnchorB = { ...sockB.localPos };
+            validJoints.push(derived);
+          } else {
+            removedJointIds.push(j.jointId);
+          }
+        }
+        state.joints = validJoints;
+      }
+
+      this.lastGeometryMigrationDiagnostics = {
+        migratedFromGeometrySchema: fromGeometrySchema,
+        migratedToGeometrySchema: GEOMETRY_SCHEMA_VERSION,
+        preservedPieceCount: state.pieces.length,
+        preservedJointCount: (state.joints ?? []).length,
+        invalidMigratedJointCount: removedJointIds.length,
+        removedJointIds,
+        result:
+          removedJointIds.length > 0 ? 'MIGRATED_WITH_JOINT_CLEANUP' : 'MIGRATED_CLEAN',
+      };
+    } else {
+      if (Array.isArray(state.joints)) {
+        state.joints = state.joints.map((j) => {
+          const pieceA = state.pieces.find((p) => p.id === j.pieceAId);
+          const pieceB = state.pieces.find((p) => p.id === j.pieceBId);
+          if (pieceA && pieceB) {
+            return deriveStressFreeJointGeometryFromCommittedTransforms(j, pieceA, pieceB);
+          }
+          return j;
+        });
+      }
+      this.lastGeometryMigrationDiagnostics = {
+        migratedFromGeometrySchema: fromGeometrySchema,
+        migratedToGeometrySchema: GEOMETRY_SCHEMA_VERSION,
+        preservedPieceCount: state.pieces.length,
+        preservedJointCount: (state.joints ?? []).length,
+        invalidMigratedJointCount: 0,
+        removedJointIds: [],
+        result: 'CURRENT',
+      };
+    }
+
+    state.schemaVersion = INITIAL_LEVEL_STATE.schemaVersion;
+    state.geometrySchemaVersion = GEOMETRY_SCHEMA_VERSION;
+    state.wisps = migratedWisps;
+    state.requiredWispCount = targetCount;
+    state.activeWispIds = [...targetIds];
+    state.minimumStableWispsForCompletion = getMinimumStableWispsForCompletion(targetCount);
+    state.resultBands = buildResultBandsForWispCount(targetCount);
+    state.developerWispCountOverride = overrideCount ?? null;
+
+    // Validate placed wisps against existing pieces/terrain so migrated saves never keep invalid wisp overlaps
+    for (const w of state.wisps) {
+      if (w.placed === true) {
+        const val = validateWispPlacementPosition(
+          w.id,
+          w.position,
+          state.wisps,
+          state.pieces,
+          state.anchors,
+        );
+        if (!val.isValid) {
+          w.placed = false;
+          w.isValid = false;
+          w.position = { ...(w.defaultPosition ?? getDefaultWispPosition(w.id)) };
+          w.validationReason = val.rejectionCode;
+        } else {
+          w.isValid = true;
+          w.validationReason = null;
+        }
+      }
+    }
+
+    state.snapshotMetadata = this.buildSnapshotWispMetadata(state);
+    return state;
   }
 
   private normalizeBuildPhaseWisps(): void {
@@ -288,15 +750,15 @@ export class LevelStore {
       return {
         id: 'region_western_roof_beam',
         pieceType: 'wood_beam',
-        center: { x: 200, y: 672 },
-        width: 120,
-        height: 24,
-        toleranceRadius: 85,
+        center: { x: 296, y: 672 },
+        width: MATERIAL_CONFIGS.wood_beam.width,
+        height: MATERIAL_CONFIGS.wood_beam.height,
+        toleranceRadius: 96,
         label: 'Roof Span Support',
         supportPoints: [
           { x: 200, y: 684 },
-          { x: 400, y: 732 },
-          { x: 600, y: 684 },
+          { x: 392, y: 732 },
+          { x: 584, y: 684 },
         ],
       };
     }
@@ -304,14 +766,14 @@ export class LevelStore {
     if (step === 'STEP_3_PLACE_BLOCK' || step === 'STEP_4_CREATE_SUPPORT') {
       // Find placed beam if one exists to suggest a safe support location near it that never overlaps wisps
       const beam = playerPieces.find((p) => p.type === 'wood_beam');
-      const suggestedX = beam && beam.position.x >= 500 ? 648 : 152;
-      const supportColX = beam && beam.position.x >= 500 ? 600 : 200;
+      const suggestedX = beam && beam.position.x >= 490 ? 632 : 152;
+      const supportColX = beam && beam.position.x >= 490 ? 584 : 200;
       return {
         id: 'region_beam_support_block',
         pieceType: 'wood_block',
         center: { x: suggestedX, y: 756 },
-        width: 48,
-        height: 48,
+        width: MATERIAL_CONFIGS.wood_block.width,
+        height: MATERIAL_CONFIGS.wood_block.height,
         toleranceRadius: 85,
         label: 'Support Block Position',
         supportPoints: [
@@ -935,10 +1397,186 @@ export class LevelStore {
     return this.isReinforcementMode ? this.reinforcementRedoStack : this.redoStack;
   }
 
+  public activeJointEditTransaction: JointEditTransactionSnapshot | null = null;
+  public lastJointEditOutcome: 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'ACTIVE' | 'IDLE' = 'IDLE';
+  public lastHistoryOperationId: string | null = null;
+  public lastJointRestoreReason: string | null = null;
+  public snappingEnabled = true;
+  private jointOperationSeq = 1;
+
+  public seenConnectionHints: Record<
+    | 'splice'
+    | 'angled_face'
+    | 'roof_peak'
+    | 'roof_peak_unsupported'
+    | 'diagonal_brace'
+    | 'rafter_corner_seat'
+    | 'timber_corner',
+    boolean
+  > = {
+    splice: false,
+    angled_face: false,
+    roof_peak: false,
+    roof_peak_unsupported: false,
+    diagonal_brace: false,
+    rafter_corner_seat: false,
+    timber_corner: false,
+  };
+  public activeConnectionHint: { id: string; text: string } | null = null;
+
+  public dismissConnectionHint(): void {
+    if (this.activeConnectionHint) {
+      this.activeConnectionHint = null;
+      this.notify();
+    }
+  }
+
+  private triggerConnectionDiscoveryHint(
+    jointType: TimberJointType,
+    lowerSupportsDetected?: boolean,
+  ): void {
+    if (jointType === 'RAFTER_CORNER_SEAT' && !this.seenConnectionHints.rafter_corner_seat) {
+      this.seenConnectionHints.rafter_corner_seat = true;
+      this.activeConnectionHint = {
+        id: 'rafter_corner_seat',
+        text: 'Rafters can seat cleanly on block corners.',
+      };
+    } else if (jointType === 'TIMBER_CORNER' && !this.seenConnectionHints.timber_corner) {
+      this.seenConnectionHints.timber_corner = true;
+      this.activeConnectionHint = {
+        id: 'timber_corner',
+        text: 'Vertical and horizontal beams can form a corner joint.',
+      };
+    } else if (jointType === 'ROOF_PEAK') {
+      if (lowerSupportsDetected === false && !this.seenConnectionHints.roof_peak_unsupported) {
+        this.seenConnectionHints.roof_peak_unsupported = true;
+        this.activeConnectionHint = {
+          id: 'roof_peak_unsupported',
+          text: 'Support both lower rafter ends before testing stability.',
+        };
+      } else if (!this.seenConnectionHints.roof_peak) {
+        this.seenConnectionHints.roof_peak = true;
+        this.activeConnectionHint = {
+          id: 'roof_peak',
+          text: 'Both rafters meet at a shared peak.',
+        };
+      }
+    } else if (
+      (jointType === 'TIMBER_SPLICE' || jointType === 'BEAM_END_TO_BEAM_END') &&
+      !this.seenConnectionHints.splice
+    ) {
+      this.seenConnectionHints.splice = true;
+      this.activeConnectionHint = {
+        id: 'splice',
+        text: 'Timber Splice: Beams can connect end-to-end, but wide spans still need support.',
+      };
+    } else if (jointType === 'TIMBER_FACE' && !this.seenConnectionHints.angled_face) {
+      this.seenConnectionHints.angled_face = true;
+      this.activeConnectionHint = {
+        id: 'angled_face',
+        text: 'Timber Face Joint: Angled beams can rest flush against timber faces.',
+      };
+    } else if (jointType === 'DIAGONAL_BRACE' && !this.seenConnectionHints.diagonal_brace) {
+      this.seenConnectionHints.diagonal_brace = true;
+      this.activeConnectionHint = {
+        id: 'diagonal_brace',
+        text: 'Diagonal Brace: Diagonal braces help frames resist sideways impact.',
+      };
+    }
+  }
+
+  public beginJointEditTransaction(pieceId: string): JointEditTransactionSnapshot | null {
+    const piece = this.state.pieces.find((p) => p.id === pieceId);
+    if (!piece) return null;
+    const affectedJoints = deepClone(this.getJointsForPiece(pieceId, false));
+    const allJointsAtStart = deepClone(this.getJoints());
+    const socketPairs = affectedJoints.map((j) => ({
+      jointId: j.jointId,
+      socketAId: j.socketAId,
+      socketBId: j.socketBId,
+    }));
+    const strengthProfiles: Record<string, string> = {};
+    const neighborSet = new Set<string>();
+    for (const j of affectedJoints) {
+      strengthProfiles[j.jointId] = j.strengthProfile;
+      neighborSet.add(j.pieceAId === pieceId ? j.pieceBId : j.pieceAId);
+    }
+
+    const partnerPieceTransforms: Record<string, { position: Vector2; rotation: number }> = {};
+    for (const p of this.state.pieces) {
+      if (p.id !== pieceId) {
+        partnerPieceTransforms[p.id] = {
+          position: { ...p.position },
+          rotation: p.rotation,
+        };
+      }
+    }
+
+    const opId = `jedit_op_${this.jointOperationSeq++}`;
+    this.activeJointEditTransaction = {
+      operationId: opId,
+      pieceId,
+      startTransform: {
+        position: { ...piece.position },
+        rotation: piece.rotation,
+        preferredRotation: piece.preferredRotation ?? piece.rotation,
+        rotationSource: piece.rotationSource ?? 'DEFAULT',
+        manualRotationRevision: piece.manualRotationRevision ?? 0,
+        attachedAnchorId: piece.attachedAnchorId,
+      },
+      partnerPieceTransforms,
+      pieceCondition: piece.condition ?? 'INTACT',
+      affectedJoints,
+      allJointsAtStart,
+      socketPairs,
+      strengthProfiles,
+      neighborPieceIds: Array.from(neighborSet),
+      constructionRevision: this.currentConstructionRevision,
+      inventorySnapshot: { ...this.state.inventory },
+      startedAt: Date.now(),
+    };
+    this.lastJointEditOutcome = 'ACTIVE';
+    this.lastJointRestoreReason = null;
+    return this.activeJointEditTransaction;
+  }
+
+  public cancelJointEditTransaction(reason = 'USER_CANCELED'): boolean {
+    const tx = this.activeJointEditTransaction;
+    if (!tx) {
+      this.lastJointEditOutcome = 'CANCELED';
+      this.lastJointRestoreReason = reason;
+      return false;
+    }
+    const piece = this.state.pieces.find((p) => p.id === tx.pieceId);
+    if (piece) {
+      piece.position = { ...tx.startTransform.position };
+      piece.rotation = tx.startTransform.rotation;
+      piece.preferredRotation = tx.startTransform.preferredRotation;
+      piece.rotationSource = tx.startTransform.rotationSource;
+      piece.manualRotationRevision = tx.startTransform.manualRotationRevision;
+      piece.attachedAnchorId = tx.startTransform.attachedAnchorId;
+    }
+    if (tx.partnerPieceTransforms) {
+      for (const [partnerId, t] of Object.entries(tx.partnerPieceTransforms)) {
+        const partner = this.state.pieces.find((p) => p.id === partnerId);
+        if (partner) {
+          partner.position = { ...t.position };
+          partner.rotation = t.rotation;
+        }
+      }
+    }
+    this.state.joints = deepClone(tx.allJointsAtStart);
+    this.activeJointEditTransaction = null;
+    this.lastJointEditOutcome = 'CANCELED';
+    this.lastJointRestoreReason = reason;
+    this.notify();
+    return true;
+  }
+
   public placePiece(
     piece: PlacedPiece,
     recordUndo = true,
-    proposedJoint?: ProposedTimberJoint | null,
+    proposedJoint?: ProposedTimberJoint | ProposedTimberJoint[] | null,
   ): boolean {
     // Enforce One Active Bullseye Limit: never allow more than one Bullseye Block on the battlefield
     if (piece.type === 'bullseye_block') {
@@ -1010,25 +1648,76 @@ export class LevelStore {
       this.state.pieces.push(enrichedPiece);
     }
 
-    const createdJoints: TimberJoint[] = [];
-    if (proposedJoint && piece.type === 'wood_beam') {
-      const created = this.createOrUpdateTimberJointFromProposal(resolvedId, proposedJoint);
-      if (created) {
-        createdJoints.push(deepClone(created));
+    const proposals = Array.isArray(proposedJoint)
+      ? proposedJoint
+      : proposedJoint
+        ? [proposedJoint]
+        : [];
+
+    // Apply any Balanced Peak Adjustment partner piece moves atomically
+    const partnerPieceMoves: PartnerPieceAdjustment[] = [];
+    for (const pj of proposals) {
+      if (pj.partnerPieceAdjustment) {
+        const adj = pj.partnerPieceAdjustment;
+        const partner = this.state.pieces.find((p) => p.id === adj.pieceId);
+        if (
+          partner &&
+          (!partner.isPrebuilt || partner.ownership === 'PREBUILT_MOVABLE') &&
+          partner.condition !== 'BROKEN' &&
+          partner.condition !== 'LOST' &&
+          !partnerPieceMoves.some((m) => m.pieceId === partner.id)
+        ) {
+          const beforePartnerPos = { ...partner.position };
+          const targetPartnerPos = adj.afterPos ?? adj.proposedPosition ?? partner.position;
+          partner.position = { ...targetPartnerPos };
+          partnerPieceMoves.push({
+            pieceId: partner.id,
+            beforePos: beforePartnerPos,
+            afterPos: { ...partner.position },
+            proposedPosition: { ...partner.position },
+            beforeRot: partner.rotation,
+            afterRot: partner.rotation,
+            correctionVector: {
+              x: partner.position.x - beforePartnerPos.x,
+              y: partner.position.y - beforePartnerPos.y,
+            },
+          });
+        }
       }
     }
+
+    const createdJoints: TimberJoint[] = [];
+    if (proposals.length > 0 && PIECE_DEFINITIONS[piece.type]?.jointCapable) {
+      for (const pj of proposals) {
+        const created = this.createOrUpdateTimberJointFromProposal(resolvedId, pj);
+        if (created) {
+          createdJoints.push(deepClone(created));
+          this.triggerConnectionDiscoveryHint(created.jointType, pj.lowerSupportsDetected);
+        }
+      }
+    }
+
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`PLACE_PIECE_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `place_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+    this.lastJointEditOutcome = 'ACCEPTED';
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'PLACE_PIECE',
+        operationId,
         piece: deepClone(this.state.pieces[this.state.pieces.length - 1]),
         fromDelivered,
+        beforeRevision,
+        afterRevision,
         ...(createdJoints.length > 0 ? { createdJoints } : {}),
+        ...(partnerPieceMoves.length > 0 ? { partnerPieceMoves } : {}),
       });
       this.getActiveRedoStack().length = 0;
     }
 
-    this.incrementConstructionRevision(`PLACE_PIECE_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -1064,8 +1753,8 @@ export class LevelStore {
     if (
       !sourcePiece ||
       !targetPiece ||
-      sourcePiece.type !== 'wood_beam' ||
-      targetPiece.type !== 'wood_beam' ||
+      !PIECE_DEFINITIONS[sourcePiece.type]?.jointCapable ||
+      !PIECE_DEFINITIONS[targetPiece.type]?.jointCapable ||
       sourcePiece.condition === 'BROKEN' ||
       sourcePiece.condition === 'LOST' ||
       targetPiece.condition === 'BROKEN' ||
@@ -1082,36 +1771,92 @@ export class LevelStore {
       proposal.targetSocketName,
     );
 
-    // Check if an active joint already connects these two pieces
+    const socketAId = `${sourcePieceId}_${proposal.sourceSocketName}`;
+    const socketBId = `${proposal.targetPieceId}_${proposal.targetSocketName}`;
+
+    // Check if an active joint already connects these two pieces or uses the same endpoint socket on sourcePiece
     const existingIdx = joints.findIndex(
       (j) =>
         j.state !== 'BROKEN' &&
         (j.jointId === jointId ||
           (j.pieceAId === sourcePieceId && j.pieceBId === proposal.targetPieceId) ||
-          (j.pieceAId === proposal.targetPieceId && j.pieceBId === sourcePieceId)),
+          (j.pieceAId === proposal.targetPieceId && j.pieceBId === sourcePieceId) ||
+          (proposal.sourceSocketName.startsWith('END_') &&
+            ((j.pieceAId === sourcePieceId && j.socketAId === socketAId) ||
+              (j.pieceBId === sourcePieceId && j.socketBId === socketAId)))),
     );
 
-    const newJoint: TimberJoint = {
+    const matPairKey =
+      proposal.materialPairKey ??
+      resolveMaterialPairProfileId(
+        sourcePiece.type,
+        targetPiece.type,
+        Boolean(sourcePiece.isPrebuilt),
+        Boolean(targetPiece.isPrebuilt),
+        proposal.jointType,
+      );
+    const connSubtype =
+      proposal.connectionSubtype ??
+      resolveConnectionSubtype(proposal.jointType, sourcePiece.type, targetPiece.type);
+    const resolvedProfile =
+      proposal.strengthProfile ||
+      resolveBindingStrengthProfile(
+        proposal.jointType,
+        sourcePiece.type,
+        targetPiece.type,
+        Boolean(sourcePiece.isPrebuilt),
+        Boolean(targetPiece.isPrebuilt),
+      );
+
+    const rawJoint: TimberJoint = {
       jointId,
+      bindingId: jointId,
       jointType: proposal.jointType,
+      connectionSubtype: connSubtype,
       pieceAId: sourcePieceId,
       pieceBId: proposal.targetPieceId,
-      socketAId: `${sourcePieceId}_${proposal.sourceSocketName}`,
-      socketBId: `${proposal.targetPieceId}_${proposal.targetSocketName}`,
+      materialA: sourcePiece.type,
+      materialB: targetPiece.type,
+      materialPairKey: matPairKey,
+      isPrebuiltBinding: Boolean(sourcePiece.isPrebuilt || targetPiece.isPrebuilt),
+      socketAId,
+      socketBId,
       localAnchorA: { ...proposal.localAnchorA },
       localAnchorB: { ...proposal.localAnchorB },
       worldPosition: { ...proposal.worldPosition },
       restAngle: proposal.restAngle,
-      restSeparation: proposal.restSeparation,
-      strengthProfile: proposal.strengthProfile || 'standard_timber_joint',
+      restSeparation: 0,
+      strengthProfile: resolvedProfile,
+      complianceProfile: proposal.complianceProfile ?? resolvedProfile,
       state: 'INTACT',
       currentStress: 0,
       maxStressObserved: 0,
       createdInPhase: this.isReinforcementMode ? 'REINFORCEMENT' : 'BUILD',
+      creationReason:
+        proposal.creationReason ??
+        (this.isReinforcementMode ? 'REINFORCEMENT_COMMIT' : 'SNAP_COMMIT'),
+      geometrySchemaVersion: GEOMETRY_SCHEMA_VERSION,
       brokenInPhase: null,
       brokenByAttackId: null,
       failureReason: null,
+      sourceFaceId: proposal.sourceFaceId ?? null,
+      targetFaceId: proposal.targetFaceId ?? null,
+      sourceCornerId: proposal.sourceCornerId ?? null,
+      targetCornerId: proposal.targetCornerId ?? null,
+      lowerSupportsDetected: proposal.lowerSupportsDetected,
+      visualJointCapType:
+        proposal.visualJointCapType ??
+        getVisualJointCapType(proposal.jointType, proposal.connectionTaxonomy, matPairKey),
+      initialPositionalErrorPx: 0,
+      initialAngularErrorRad: 0,
+      initialConstraintEnergy: 0,
     };
+
+    const newJoint = deriveStressFreeJointGeometryFromCommittedTransforms(
+      rawJoint,
+      sourcePiece,
+      targetPiece,
+    );
 
     if (existingIdx !== -1) {
       joints[existingIdx] = newJoint;
@@ -1173,11 +1918,20 @@ export class LevelStore {
       this.reinforcementMaterialsUsed = Math.max(0, this.reinforcementMaterialsUsed - 1);
     }
 
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`REMOVE_PIECE_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `remove_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'REMOVE_PIECE',
+        operationId,
         piece: deepClone(piece),
         toDelivered: wasDelivered,
+        beforeRevision,
+        afterRevision,
         ...(removedJoints.length > 0 ? { removedJoints } : {}),
       });
       this.getActiveRedoStack().length = 0;
@@ -1189,7 +1943,6 @@ export class LevelStore {
     ) {
       this.beamSelectedInInventory = false;
     }
-    this.incrementConstructionRevision(`REMOVE_PIECE_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -1201,7 +1954,7 @@ export class LevelStore {
     newRotationOrAnchor?: number | string,
     newAnchorId?: string,
     recordUndo = true,
-    proposedJoint?: ProposedTimberJoint | null,
+    proposedJoint?: ProposedTimberJoint | ProposedTimberJoint[] | null,
   ): boolean {
     const piece = this.state.pieces.find((p) => p.id === pieceId);
     if (!piece) return false;
@@ -1209,9 +1962,14 @@ export class LevelStore {
     const eligibility = this.canManipulatePiece(piece);
     if (!eligibility.canMove) return false;
 
-    const beforePos = { ...piece.position };
-    const beforeRot = piece.rotation;
-    const beforeAnchorId = piece.attachedAnchorId;
+    const tx =
+      this.activeJointEditTransaction?.pieceId === pieceId
+        ? this.activeJointEditTransaction
+        : null;
+
+    const beforePos = tx ? { ...tx.startTransform.position } : { ...piece.position };
+    const beforeRot = tx ? tx.startTransform.rotation : piece.rotation;
+    const beforeAnchorId = tx ? tx.startTransform.attachedAnchorId : piece.attachedAnchorId;
 
     const afterRot =
       typeof newRotationOrAnchor === 'number' ? newRotationOrAnchor : piece.rotation;
@@ -1222,87 +1980,146 @@ export class LevelStore {
     const cfg = MATERIAL_CONFIGS[piece.type];
     const candidateOBB = createOBB(newPos, cfg.width, cfg.height, afterRot);
     if (checkPieceOverlapsWisps(candidateOBB, this.state.wisps).overlaps) {
+      this.lastJointEditOutcome = 'REJECTED';
+      this.lastJointRestoreReason = 'WISP_OVERLAP';
       return false;
+    }
+
+    const explicitProposals = Array.isArray(proposedJoint)
+      ? proposedJoint
+      : proposedJoint
+        ? [proposedJoint]
+        : [];
+    const proposedTargetIds = new Set(explicitProposals.map((p) => p.targetPieceId));
+    const partnerAdjustmentsById = new Map<string, Vector2>();
+    for (const pj of explicitProposals) {
+      if (pj.partnerPieceAdjustment) {
+        const targetPos =
+          pj.partnerPieceAdjustment.afterPos ?? pj.partnerPieceAdjustment.proposedPosition;
+        if (targetPos) {
+          partnerAdjustmentsById.set(pj.partnerPieceAdjustment.pieceId, targetPos);
+        }
+      }
     }
 
     // Validate against overlapping other pieces
     for (const other of this.state.pieces) {
       if (other.id === pieceId || other.condition === 'LOST') continue;
+      const otherEffectivePos = partnerAdjustmentsById.get(other.id) ?? other.position;
       const oCfg = MATERIAL_CONFIGS[other.type];
-      const oOBB = createOBB(other.position, oCfg.width, oCfg.height, other.rotation);
-      const tol =
-        proposedJoint && other.id === proposedJoint.targetPieceId ? 0.05 : 2.5;
+      const oOBB = createOBB(otherEffectivePos, oCfg.width, oCfg.height, other.rotation);
+      const tol = proposedTargetIds.has(other.id) ? 0.05 : 2.5;
       if (getOBBPenetrationDepth(candidateOBB, oOBB, tol) > 0) {
+        this.lastJointEditOutcome = 'REJECTED';
+        this.lastJointRestoreReason = 'PIECE_OVERLAP';
         return false;
       }
     }
 
-    // Validate existing active TimberJoints on this piece:
-    // Moving a connected beam must either update the joint via proposedJoint or keep the connected
-    // sockets within valid clearance (never stretching a joint across arbitrary distance).
-    const beforeJoints = deepClone(this.getJointsForPiece(pieceId, true));
-    const activeConnectedJoints = this.getJointsForPiece(pieceId, false);
+    const beforeJoints = tx
+      ? deepClone(tx.affectedJoints)
+      : deepClone(this.getJointsForPiece(pieceId, true));
 
-    for (const joint of activeConnectedJoints) {
-      const isPieceA = joint.pieceAId === pieceId;
-      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
-      if (proposedJoint && proposedJoint.targetPieceId === partnerId) {
-        continue; // Will be updated cleanly by proposedJoint below
-      }
-      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
-      if (!partnerPiece) continue;
-
-      const myLocalAnchor = isPieceA ? joint.localAnchorA : joint.localAnchorB;
-      const partnerLocalAnchor = isPieceA ? joint.localAnchorB : joint.localAnchorA;
-      const newWorldSocket = Vec2.add(newPos, Vec2.rotate(myLocalAnchor, afterRot));
-      const partnerWorldSocket = Vec2.add(
-        partnerPiece.position,
-        Vec2.rotate(partnerLocalAnchor, partnerPiece.rotation),
-      );
-      const newSeparation = Vec2.distance(newWorldSocket, partnerWorldSocket);
-
-      if (newSeparation > TIMBER_JOINT_CONFIG.maxAngledSocketClearance + 1.5) {
-        return false; // Reject incompatible move that would stretch the joint without detaching
+    // Apply any partner piece moves from Balanced Peak Adjustment atomically
+    const partnerPieceMoves: PartnerPieceAdjustment[] = [];
+    for (const [partnerId, proposedPos] of partnerAdjustmentsById.entries()) {
+      const partner = this.state.pieces.find((p) => p.id === partnerId);
+      if (
+        partner &&
+        (!partner.isPrebuilt || partner.ownership === 'PREBUILT_MOVABLE') &&
+        partner.condition !== 'BROKEN' &&
+        partner.condition !== 'LOST'
+      ) {
+        const beforePartnerPos =
+          tx?.partnerPieceTransforms?.[partnerId]?.position ?? { ...partner.position };
+        partner.position = { ...proposedPos };
+        partnerPieceMoves.push({
+          pieceId: partner.id,
+          beforePos: { ...beforePartnerPos },
+          afterPos: { ...partner.position },
+          proposedPosition: { ...partner.position },
+          beforeRot: partner.rotation,
+          afterRot: partner.rotation,
+          correctionVector: {
+            x: partner.position.x - beforePartnerPos.x,
+            y: partner.position.y - beforePartnerPos.y,
+          },
+        });
       }
     }
 
+    // Evaluate which existing joints remain compatible and which are obsolete/removed
+    const evalResult = evaluateJointsForPieceTransform(
+      pieceId,
+      piece.type,
+      newPos,
+      afterRot,
+      this.state.pieces,
+      this.getJoints(),
+      proposedJoint !== null && this.snappingEnabled,
+    );
+
+    const removedIds = new Set(evalResult.removedJoints.map((j) => j.jointId));
+    const preservedMap = new Map(evalResult.preservedJoints.map((j) => [j.jointId, j]));
+
+    // Apply transform
     piece.position = { ...newPos };
     piece.rotation = afterRot;
     piece.attachedAnchorId = afterAnchorId;
 
-    // Update existing joints that remained within clearance
-    for (const joint of activeConnectedJoints) {
-      const isPieceA = joint.pieceAId === pieceId;
-      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
-      if (proposedJoint && proposedJoint.targetPieceId === partnerId) continue;
-      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
-      if (!partnerPiece) continue;
+    // 1. Remove obsolete joints and update preserved joints
+    const currentJoints = this.getJoints();
+    const nextJoints: TimberJoint[] = [];
+    for (const j of currentJoints) {
+      if (removedIds.has(j.jointId)) {
+        continue;
+      }
+      const preserved = preservedMap.get(j.jointId);
+      if (preserved) {
+        nextJoints.push(preserved);
+      } else {
+        nextJoints.push(j);
+      }
+    }
+    this.state.joints = nextJoints;
 
-      const worldSocketA = Vec2.add(
-        isPieceA ? newPos : partnerPiece.position,
-        Vec2.rotate(joint.localAnchorA, isPieceA ? afterRot : partnerPiece.rotation),
-      );
-      const worldSocketB = Vec2.add(
-        isPieceA ? partnerPiece.position : newPos,
-        Vec2.rotate(joint.localAnchorB, isPieceA ? partnerPiece.rotation : afterRot),
-      );
-      joint.restSeparation = Number(Vec2.distance(worldSocketA, worldSocketB).toFixed(2));
-      joint.restAngle = shortestSignedAngleDelta(
-        isPieceA ? afterRot : partnerPiece.rotation,
-        isPieceA ? partnerPiece.rotation : afterRot,
-      );
-      joint.worldPosition = Vec2.scale(Vec2.add(worldSocketA, worldSocketB), 0.5);
+    // 2. Create/update any newly proposed joints
+    const proposalsToCommit =
+      proposedJoint !== undefined ? explicitProposals : evalResult.newlyProposedJoints;
+
+    const createdJoints: TimberJoint[] = [];
+    if (proposalsToCommit.length > 0 && PIECE_DEFINITIONS[piece.type]?.jointCapable) {
+      for (const pj of proposalsToCommit) {
+        const created = this.createOrUpdateTimberJointFromProposal(pieceId, pj);
+        if (created) {
+          createdJoints.push(deepClone(created));
+          this.triggerConnectionDiscoveryHint(created.jointType, pj.lowerSupportsDetected);
+        }
+      }
     }
 
-    if (proposedJoint && piece.type === 'wood_beam') {
-      this.createOrUpdateTimberJointFromProposal(pieceId, proposedJoint);
-    }
+    // Deduplicate joints by socket pair so a single socket pair never has more than 1 logical joint
+    const seenIds = new Set<string>();
+    this.state.joints = this.getJoints().filter((j) => {
+      if (seenIds.has(j.jointId)) return false;
+      seenIds.add(j.jointId);
+      return true;
+    });
 
     const afterJoints = deepClone(this.getJointsForPiece(pieceId, true));
+    const beforeRevision = tx ? tx.constructionRevision : this.currentConstructionRevision;
+    this.incrementConstructionRevision(`MOVE_PIECE_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = tx ? tx.operationId : `move_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+    this.activeJointEditTransaction = null;
+    this.lastJointEditOutcome = 'ACCEPTED';
+    this.lastJointRestoreReason = null;
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'MOVE_PIECE',
+        operationId,
         pieceId,
         beforePos,
         beforeRot,
@@ -1310,6 +2127,12 @@ export class LevelStore {
         afterPos: { ...newPos },
         afterRot,
         afterAnchorId,
+        beforeRevision,
+        afterRevision,
+        removedJoints: deepClone(evalResult.removedJoints),
+        preservedJoints: deepClone(evalResult.preservedJoints),
+        createdJoints,
+        ...(partnerPieceMoves.length > 0 ? { partnerPieceMoves } : {}),
         ...(beforeJoints.length > 0 || afterJoints.length > 0
           ? { beforeJoints, afterJoints }
           : {}),
@@ -1317,7 +2140,6 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
-    this.incrementConstructionRevision(`MOVE_PIECE_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -1380,16 +2202,24 @@ export class LevelStore {
     this.state.joints = joints.filter((j) => !removedIds.has(j.jointId));
     this.lastRotationDiagnostics = null;
 
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`DETACH_TIMBER_JOINT_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `detach_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'DETACH_JOINT',
+        operationId,
         pieceId,
         removedJoints,
+        beforeRevision,
+        afterRevision,
       });
       this.getActiveRedoStack().length = 0;
     }
 
-    this.incrementConstructionRevision(`DETACH_TIMBER_JOINT_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -1410,9 +2240,16 @@ export class LevelStore {
     piece.attachedAnchorId = undefined;
     this.lastRotationDiagnostics = null;
 
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`DETACH_CONNECTION_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `detach_anchor_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'MOVE_PIECE',
+        operationId,
         pieceId,
         beforePos: { ...piece.position },
         beforeRot: piece.rotation,
@@ -1420,14 +2257,72 @@ export class LevelStore {
         afterPos: { ...piece.position },
         afterRot: piece.rotation,
         afterAnchorId: undefined,
+        beforeRevision,
+        afterRevision,
       });
       this.getActiveRedoStack().length = 0;
     }
 
-    this.incrementConstructionRevision(`DETACH_CONNECTION_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
+  }
+
+  public getManualBindCandidates(pieceId: string): ProposedTimberJoint[] {
+    const piece = this.state.pieces.find((p) => p.id === pieceId);
+    if (!piece) return [];
+    const eligibility = this.canManipulatePiece(piece);
+    if (!eligibility.canMove && !eligibility.canRotate) return [];
+    return findManualBindCandidatesForPiece(piece, this.state.pieces, this.getJoints());
+  }
+
+  public bindPieceConnection(
+    pieceId: string,
+    candidateIndex = 0,
+    recordUndo = true,
+  ): TimberJoint | null {
+    const piece = this.state.pieces.find((p) => p.id === pieceId);
+    if (!piece) return null;
+
+    const eligibility = this.canManipulatePiece(piece);
+    if (!eligibility.canMove && !eligibility.canRotate) return null;
+
+    const candidates = this.getManualBindCandidates(pieceId);
+    if (candidates.length === 0) return null;
+
+    const idx = ((candidateIndex % candidates.length) + candidates.length) % candidates.length;
+    const chosen: ProposedTimberJoint = {
+      ...candidates[idx],
+      creationReason: 'MANUAL_BIND_ACTION',
+    };
+
+    const created = this.createOrUpdateTimberJointFromProposal(pieceId, chosen);
+    if (!created) return null;
+
+    this.triggerConnectionDiscoveryHint(created.jointType, chosen.lowerSupportsDetected);
+    const createdJoints = [deepClone(created)];
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`BIND_TIMBER_JOINT_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `bind_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+    this.lastJointEditOutcome = 'ACCEPTED';
+
+    if (recordUndo) {
+      this.getActiveUndoStack().push({
+        type: 'BIND_JOINT',
+        operationId,
+        pieceId,
+        createdJoints,
+        beforeRevision,
+        afterRevision,
+      });
+      this.getActiveRedoStack().length = 0;
+    }
+
+    this.recomputeAllWispProtection();
+    this.notify();
+    return created;
   }
 
   public rotatePiece(pieceId: string, deltaAngle: number, recordUndo = true): boolean {
@@ -1452,49 +2347,72 @@ export class LevelStore {
     this.lastRotationDiagnostics = diag;
 
     if (!diag.rotationAccepted) {
+      this.lastJointEditOutcome = 'REJECTED';
+      this.lastJointRestoreReason = diag.lastRejectionReason ?? 'ROTATION_REJECTED';
       this.listeners.forEach((fn) => fn());
       return false;
     }
 
     const beforeJoints = deepClone(this.getJointsForPiece(pieceId, true));
+    const evalResult = evaluateJointsForPieceTransform(
+      pieceId,
+      piece.type,
+      piece.position,
+      afterRotation,
+      this.state.pieces,
+      this.getJoints(),
+      this.snappingEnabled,
+    );
 
     piece.rotation = afterRotation;
     piece.preferredRotation = afterRotation;
     piece.rotationSource = 'USER';
     piece.manualRotationRevision = (piece.manualRotationRevision ?? 0) + 1;
 
-    // Update any active timber joints that remained within valid socket clearance
-    for (const joint of this.getJointsForPiece(pieceId, false)) {
-      const isPieceA = joint.pieceAId === pieceId;
-      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
-      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
-      if (!partnerPiece) continue;
-      const worldSocketA = Vec2.add(
-        isPieceA ? piece.position : partnerPiece.position,
-        Vec2.rotate(joint.localAnchorA, isPieceA ? afterRotation : partnerPiece.rotation),
-      );
-      const worldSocketB = Vec2.add(
-        isPieceA ? partnerPiece.position : piece.position,
-        Vec2.rotate(joint.localAnchorB, isPieceA ? partnerPiece.rotation : afterRotation),
-      );
-      joint.restSeparation = Number(Vec2.distance(worldSocketA, worldSocketB).toFixed(2));
-      joint.restAngle = shortestSignedAngleDelta(
-        isPieceA ? afterRotation : partnerPiece.rotation,
-        isPieceA ? partnerPiece.rotation : afterRotation,
-      );
-      joint.worldPosition = Vec2.scale(Vec2.add(worldSocketA, worldSocketB), 0.5);
+    // Remove obsolete joints and update preserved joints
+    const removedIds = new Set(evalResult.removedJoints.map((j) => j.jointId));
+    const preservedMap = new Map(evalResult.preservedJoints.map((j) => [j.jointId, j]));
+    const nextJoints: TimberJoint[] = [];
+    for (const j of this.getJoints()) {
+      if (removedIds.has(j.jointId)) continue;
+      const preserved = preservedMap.get(j.jointId);
+      nextJoints.push(preserved ?? j);
+    }
+    this.state.joints = nextJoints;
+
+    // Create any newly aligned joints at the rotated orientation
+    const createdJoints: TimberJoint[] = [];
+    for (const pj of evalResult.newlyProposedJoints) {
+      const created = this.createOrUpdateTimberJointFromProposal(pieceId, pj);
+      if (created) {
+        createdJoints.push(deepClone(created));
+        this.triggerConnectionDiscoveryHint(created.jointType);
+      }
     }
 
     const afterJoints = deepClone(this.getJointsForPiece(pieceId, true));
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`ROTATE_PIECE_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `rot_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+    this.lastJointEditOutcome = 'ACCEPTED';
+    this.lastJointRestoreReason = null;
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'ROTATE_PIECE',
+        operationId,
         pieceId,
         beforeRotation,
         afterRotation,
         beforeAnchorId,
         afterAnchorId: beforeAnchorId,
+        beforeRevision,
+        afterRevision,
+        removedJoints: deepClone(evalResult.removedJoints),
+        preservedJoints: deepClone(evalResult.preservedJoints),
+        createdJoints,
         ...(beforeJoints.length > 0 || afterJoints.length > 0
           ? { beforeJoints, afterJoints }
           : {}),
@@ -1502,7 +2420,6 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
-    this.incrementConstructionRevision(`ROTATE_PIECE_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -1530,48 +2447,70 @@ export class LevelStore {
     this.lastRotationDiagnostics = diag;
 
     if (!diag.rotationAccepted) {
+      this.lastJointEditOutcome = 'REJECTED';
+      this.lastJointRestoreReason = diag.lastRejectionReason ?? 'ROTATION_REJECTED';
       this.listeners.forEach((fn) => fn());
       return false;
     }
 
     const beforeJoints = deepClone(this.getJointsForPiece(pieceId, true));
+    const evalResult = evaluateJointsForPieceTransform(
+      pieceId,
+      piece.type,
+      piece.position,
+      afterRotation,
+      this.state.pieces,
+      this.getJoints(),
+      this.snappingEnabled,
+    );
 
     piece.rotation = afterRotation;
     piece.preferredRotation = afterRotation;
     piece.rotationSource = 'USER';
     piece.manualRotationRevision = (piece.manualRotationRevision ?? 0) + 1;
 
-    for (const joint of this.getJointsForPiece(pieceId, false)) {
-      const isPieceA = joint.pieceAId === pieceId;
-      const partnerId = isPieceA ? joint.pieceBId : joint.pieceAId;
-      const partnerPiece = this.state.pieces.find((p) => p.id === partnerId);
-      if (!partnerPiece) continue;
-      const worldSocketA = Vec2.add(
-        isPieceA ? piece.position : partnerPiece.position,
-        Vec2.rotate(joint.localAnchorA, isPieceA ? afterRotation : partnerPiece.rotation),
-      );
-      const worldSocketB = Vec2.add(
-        isPieceA ? partnerPiece.position : piece.position,
-        Vec2.rotate(joint.localAnchorB, isPieceA ? partnerPiece.rotation : afterRotation),
-      );
-      joint.restSeparation = Number(Vec2.distance(worldSocketA, worldSocketB).toFixed(2));
-      joint.restAngle = shortestSignedAngleDelta(
-        isPieceA ? afterRotation : partnerPiece.rotation,
-        isPieceA ? partnerPiece.rotation : afterRotation,
-      );
-      joint.worldPosition = Vec2.scale(Vec2.add(worldSocketA, worldSocketB), 0.5);
+    const removedIds = new Set(evalResult.removedJoints.map((j) => j.jointId));
+    const preservedMap = new Map(evalResult.preservedJoints.map((j) => [j.jointId, j]));
+    const nextJoints: TimberJoint[] = [];
+    for (const j of this.getJoints()) {
+      if (removedIds.has(j.jointId)) continue;
+      const preserved = preservedMap.get(j.jointId);
+      nextJoints.push(preserved ?? j);
+    }
+    this.state.joints = nextJoints;
+
+    const createdJoints: TimberJoint[] = [];
+    for (const pj of evalResult.newlyProposedJoints) {
+      const created = this.createOrUpdateTimberJointFromProposal(pieceId, pj);
+      if (created) {
+        createdJoints.push(deepClone(created));
+        this.triggerConnectionDiscoveryHint(created.jointType);
+      }
     }
 
     const afterJoints = deepClone(this.getJointsForPiece(pieceId, true));
+    const beforeRevision = this.currentConstructionRevision;
+    this.incrementConstructionRevision(`SET_ROTATION_${piece.type.toUpperCase()}`);
+    const afterRevision = this.currentConstructionRevision;
+    const operationId = `setrot_op_${this.jointOperationSeq++}`;
+    this.lastHistoryOperationId = operationId;
+    this.lastJointEditOutcome = 'ACCEPTED';
+    this.lastJointRestoreReason = null;
 
     if (recordUndo) {
       this.getActiveUndoStack().push({
         type: 'ROTATE_PIECE',
+        operationId,
         pieceId,
         beforeRotation,
         afterRotation,
         beforeAnchorId: piece.attachedAnchorId,
         afterAnchorId: piece.attachedAnchorId,
+        beforeRevision,
+        afterRevision,
+        removedJoints: deepClone(evalResult.removedJoints),
+        preservedJoints: deepClone(evalResult.preservedJoints),
+        createdJoints,
         ...(beforeJoints.length > 0 || afterJoints.length > 0
           ? { beforeJoints, afterJoints }
           : {}),
@@ -1579,7 +2518,6 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
-    this.incrementConstructionRevision(`SET_ROTATION_${piece.type.toUpperCase()}`);
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -1636,6 +2574,14 @@ export class LevelStore {
             this.reinforcementMaterialsUsed = Math.max(0, this.reinforcementMaterialsUsed - 1);
           }
         }
+        if (action.partnerPieceMoves) {
+          for (const pm of action.partnerPieceMoves) {
+            const partner = this.state.pieces.find((p) => p.id === pm.pieceId);
+            if (partner) {
+              partner.position = { ...pm.beforePos };
+            }
+          }
+        }
         if (action.createdJoints && action.createdJoints.length > 0) {
           const createdIds = new Set(action.createdJoints.map((j) => j.jointId));
           this.state.joints = joints.filter(
@@ -1686,6 +2632,14 @@ export class LevelStore {
           p.rotation = action.beforeRot;
           p.attachedAnchorId = action.beforeAnchorId;
         }
+        if (action.partnerPieceMoves) {
+          for (const pm of action.partnerPieceMoves) {
+            const partner = this.state.pieces.find((item) => item.id === pm.pieceId);
+            if (partner) {
+              partner.position = { ...pm.beforePos };
+            }
+          }
+        }
         if (action.beforeJoints !== undefined || action.afterJoints !== undefined) {
           this.replaceJointsForPiece(action.pieceId, action.beforeJoints ?? []);
         }
@@ -1710,6 +2664,11 @@ export class LevelStore {
             joints.push(deepClone(rj));
           }
         }
+        break;
+      }
+      case 'BIND_JOINT': {
+        const createdIds = new Set(action.createdJoints.map((j) => j.jointId));
+        this.state.joints = joints.filter((j) => !createdIds.has(j.jointId));
         break;
       }
     }
@@ -1744,6 +2703,14 @@ export class LevelStore {
           }
           if (this.isReinforcementMode) {
             this.reinforcementMaterialsUsed++;
+          }
+          if (action.partnerPieceMoves) {
+            for (const pm of action.partnerPieceMoves) {
+              const partner = this.state.pieces.find((p) => p.id === pm.pieceId);
+              if (partner) {
+                partner.position = { ...pm.afterPos };
+              }
+            }
           }
           if (action.createdJoints && action.createdJoints.length > 0) {
             const existingIds = new Set(joints.map((j) => j.jointId));
@@ -1785,6 +2752,14 @@ export class LevelStore {
           p.rotation = action.afterRot;
           p.attachedAnchorId = action.afterAnchorId;
         }
+        if (action.partnerPieceMoves) {
+          for (const pm of action.partnerPieceMoves) {
+            const partner = this.state.pieces.find((item) => item.id === pm.pieceId);
+            if (partner) {
+              partner.position = { ...pm.afterPos };
+            }
+          }
+        }
         if (action.beforeJoints !== undefined || action.afterJoints !== undefined) {
           this.replaceJointsForPiece(action.pieceId, action.afterJoints ?? []);
         }
@@ -1804,6 +2779,16 @@ export class LevelStore {
       case 'DETACH_JOINT': {
         const removedIds = new Set(action.removedJoints.map((j) => j.jointId));
         this.state.joints = joints.filter((j) => !removedIds.has(j.jointId));
+        break;
+      }
+      case 'BIND_JOINT': {
+        const existingIds = new Set(joints.map((j) => j.jointId));
+        for (const cj of action.createdJoints) {
+          if (!existingIds.has(cj.jointId)) {
+            existingIds.add(cj.jointId);
+            joints.push(deepClone(cj));
+          }
+        }
         break;
       }
     }
@@ -2105,8 +3090,12 @@ export class LevelStore {
 
   public areAllWispsPlacedAndValid(customState?: LevelState): boolean {
     const target = customState ?? this.state;
-    if (target.wisps.length < 5) return false;
+    const requiredCount = this.getRequiredWispCount(target);
+    if (requiredCount <= 0 || target.wisps.length !== requiredCount) return false;
+    const seenIds = new Set<string>();
     for (const w of target.wisps) {
+      if (seenIds.has(w.id)) return false;
+      seenIds.add(w.id);
       if (w.placed !== true) return false;
       const val = validateWispPlacementPosition(
         w.id,
@@ -2170,7 +3159,26 @@ export class LevelStore {
 
   public lockWispsForSiege(): void {
     if (!this.areAllWispsPlacedAndValid()) {
+      const customPositioned = new Map<string, Vector2>();
+      for (const w of this.state.wisps) {
+        const defPos = w.defaultPosition ?? getDefaultWispPosition(w.id);
+        if (
+          !w.placed &&
+          (Math.abs(w.position.x - defPos.x) > 0.5 || Math.abs(w.position.y - defPos.y) > 0.5)
+        ) {
+          customPositioned.set(w.id, { ...w.position });
+        }
+      }
       this.placeAllWispsInDefaultSanctuarySlots(true);
+      for (const [id, pos] of customPositioned.entries()) {
+        const w = this.state.wisps.find((item) => item.id === id);
+        if (w) {
+          w.position = { ...pos };
+          w.placed = true;
+          w.isValid = true;
+          w.validationReason = null;
+        }
+      }
     }
     this.recomputeAllWispProtection();
     this.wispPlacementPhase = 'LOCKED_FOR_SIEGE';
@@ -2182,7 +3190,11 @@ export class LevelStore {
   // --- Named Snapshots & Restoration ---
 
   public saveNamedSnapshot(type: SnapshotType, customState?: LevelState): void {
+    if (!customState) {
+      this.state.snapshotMetadata = this.buildSnapshotWispMetadata(this.state);
+    }
     const snap = deepClone(customState ?? this.state);
+    snap.snapshotMetadata = this.buildSnapshotWispMetadata(snap);
     this.snapshots[type] = snap;
     if (type === 'INITIAL_DESIGN') {
       this.preTestSnapshot = deepClone(snap);
@@ -2201,9 +3213,11 @@ export class LevelStore {
   }
 
   public captureSnapshot(): void {
-    this.preTestSnapshot = deepClone(this.state);
+    const snap = deepClone(this.state);
+    snap.snapshotMetadata = this.buildSnapshotWispMetadata(snap);
+    this.preTestSnapshot = snap;
     this.preTestRevisionId = this.currentConstructionRevision;
-    this.snapshots.INITIAL_DESIGN = deepClone(this.state);
+    this.snapshots.INITIAL_DESIGN = deepClone(snap);
     this.saveSessionMeta();
   }
 
@@ -2249,8 +3263,29 @@ export class LevelStore {
     this.guaranteedDeliveryUsed = 0;
     this.bullseyeConflictDiagnostic = null;
     this.lastRotationDiagnostics = null;
+    this.isAttemptCompleted = false;
+    this.lastResults = null;
+    this.snapshots.FINAL_RESULT = null;
+    this.snapshots.POST_ATTACK_1 = null;
+    this.snapshots.REINFORCEMENT_ENTRY = null;
+    this.snapshots.REINFORCEMENT_COMPLETE = null;
     if (this.preTestRevisionId !== null) {
       this.currentConstructionRevision = this.preTestRevisionId;
+    }
+    for (const p of this.state.pieces) {
+      p.condition = 'INTACT';
+    }
+    for (const j of this.state.joints ?? []) {
+      j.state = 'INTACT';
+      j.currentStress = 0;
+      j.maxStressObserved = 0;
+      j.brokenInPhase = null;
+      j.brokenByAttackId = null;
+      j.failureReason = null;
+    }
+    for (const w of this.state.wisps) {
+      w.isDispersed = false;
+      w.dispersalTime = undefined;
     }
     this.recomputeAllWispProtection();
     this.lastChecklistRecomputationReason = 'RESTORE_FOR_RETRY_DESIGN';
@@ -2330,12 +3365,54 @@ export class LevelStore {
     );
   }
 
-  public resetToDefault(): void {
-    this.state = deepClone(INITIAL_LEVEL_STATE);
+  public hasPreTestSnapshot(): boolean {
+    return this.preTestSnapshot !== null || this.snapshots.INITIAL_DESIGN !== null;
+  }
+
+  public resetLevel(): void {
+    this.resetGeneration++;
+    this.activeAttemptId = `attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.isAttemptCompleted = false;
+
+    const activeOverride = this.developerWispCountOverride;
+    const activeCount = activeOverride ?? LEVEL_1_CONFIG.requiredWispCount;
+    const selectedIds =
+      activeOverride !== null
+        ? getSelectedWispIdsForCount(activeCount)
+        : [...LEVEL_1_CONFIG.selectedWispIds];
+
+    const freshState = deepClone(INITIAL_LEVEL_STATE);
+    freshState.attemptId = this.activeAttemptId;
+    freshState.resetGeneration = this.resetGeneration;
+    freshState.wisps = createWispsForConfiguration(selectedIds);
+    // Explicitly unplace all wisps for clean BUILD template (0 battlefield wisps, 3 in staging awaiting placement)
+    for (const w of freshState.wisps) {
+      w.placed = false;
+      w.isValid = false;
+      w.isDispersed = false;
+      w.validationReason = null;
+      w.shelterStatus = 'Exposed';
+    }
+    // Exactly 5 prebuilt intact pieces, 0 player pieces
+    freshState.pieces = deepClone(INITIAL_LEVEL_STATE.pieces).map((p) => ({
+      ...p,
+      condition: 'INTACT',
+      isPrebuilt: true,
+    }));
+    freshState.joints = [];
+    freshState.inventory = { ...INITIAL_LEVEL_STATE.inventory };
+    freshState.requiredWispCount = activeCount;
+    freshState.activeWispIds = [...selectedIds];
+    freshState.minimumStableWispsForCompletion = getMinimumStableWispsForCompletion(activeCount);
+    freshState.resultBands = buildResultBandsForWispCount(activeCount);
+    freshState.developerWispCountOverride = activeOverride;
+    freshState.snapshotMetadata = this.buildSnapshotWispMetadata(freshState);
+
+    this.state = freshState;
     this.preTestSnapshot = null;
     this.preTestRevisionId = null;
     this.snapshots = {
-      LEVEL_TEMPLATE: deepClone(INITIAL_LEVEL_STATE),
+      LEVEL_TEMPLATE: deepClone(freshState),
       STABLE_BUILD: null,
       INITIAL_DESIGN: null,
       PRE_SIEGE_WISPS: null,
@@ -2369,7 +3446,7 @@ export class LevelStore {
     this.unstableHint = null;
     this.beamSelectedInInventory = false;
     this.activeDragPieceType = null;
-    this.lastChecklistRecomputationReason = 'START_OVER_RESET';
+    this.lastChecklistRecomputationReason = 'RESET_LEVEL';
     this.lastTutorialTransition = 'RESET -> STEP_1_SELECT_BEAM';
     this.previousGuidedStep = 'STEP_1_SELECT_BEAM';
     this.lastResults = null;
@@ -2377,7 +3454,49 @@ export class LevelStore {
     this.wispPlacementPhase = 'STAGED_IN_BUILD';
     this.wispsRequiredBeforeSiege = false;
     this.recomputeAllWispProtection();
+    this.saveToStorage();
+    this.saveSessionMeta();
     this.notify();
+  }
+
+  public startOver(): void {
+    this.resetLevel();
+  }
+
+  public resetToDefault(): void {
+    this.resetLevel();
+  }
+
+  public recordAttemptCompleted(results: Level1Results | null): void {
+    this.isAttemptCompleted = true;
+    this.lastResults = results;
+    this.saveSessionMeta();
+  }
+
+  public hydrateState(
+    targetState: LevelState,
+    meta?: Partial<SavedSessionMeta>,
+    expectedGeneration?: number,
+  ): boolean {
+    if (typeof expectedGeneration === 'number' && expectedGeneration < this.resetGeneration) {
+      // Discard stale asynchronous hydration from an older reset generation
+      return false;
+    }
+    if (meta?.activeAttemptId && meta.activeAttemptId !== this.activeAttemptId && this.resetGeneration > 1) {
+      // Discard payload from mismatched attempt
+      return false;
+    }
+    this.state = this.migratePersistedLevelState(targetState);
+    if (meta) {
+      if (meta.savedPhase) this.savedPhase = meta.savedPhase;
+      if (meta.isReinforcementMode !== undefined) this.isReinforcementMode = meta.isReinforcementMode;
+      if (meta.wispPlacementPhase) this.wispPlacementPhase = meta.wispPlacementPhase;
+    }
+    this.normalizeBuildPhaseWisps();
+    this.validatePersistedTutorialAgainstDesign();
+    this.recomputeAllWispProtection();
+    this.notify();
+    return true;
   }
 
   // --- Unlock & Tutorial State ---
@@ -2501,20 +3620,17 @@ export class LevelStore {
       };
     }
 
-    // 4. Reload during Results -> restore FINAL_RESULT
+    // 4. Reload after completed attempt or during Results -> recover to fresh Level 1 template in BUILD
     if (
       phase === 'SEQUENCE_COMPLETE' ||
       phase === 'RESULTS' ||
-      phase === 'UNLOCK_PRESENTATION'
+      phase === 'UNLOCK_PRESENTATION' ||
+      this.isAttemptCompleted
     ) {
-      if (this.snapshots.FINAL_RESULT) {
-        this.state = deepClone(this.snapshots.FINAL_RESULT);
-      }
-      this.savedPhase = 'RESULTS';
-      this.notify();
+      this.resetLevel();
       return {
-        recoveredPhase: 'RESULTS',
-        message: 'Reloaded during Results: Restored FINAL_RESULT snapshot safely.',
+        recoveredPhase: 'INITIAL_CONSTRUCTION',
+        message: 'Previous attempt concluded. Restored fresh Level 1 template in BUILD phase.',
       };
     }
 
@@ -2652,6 +3768,10 @@ export class LevelStore {
         currentGuidedStep: this.previousGuidedStep,
         wispPlacementPhase: this.wispPlacementPhase,
         wispsRequiredBeforeSiege: this.wispsRequiredBeforeSiege,
+        developerWispCountOverride: this.developerWispCountOverride,
+        activeAttemptId: this.activeAttemptId,
+        resetGeneration: this.resetGeneration,
+        isAttemptCompleted: this.isAttemptCompleted,
       };
       localStorage.setItem(META_STORAGE_KEY, JSON.stringify(meta));
     } catch {
@@ -2665,10 +3785,34 @@ export class LevelStore {
       const raw = localStorage.getItem(META_STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw) as Partial<SavedSessionMeta>;
+      if (typeof parsed.activeAttemptId === 'string') {
+        this.activeAttemptId = parsed.activeAttemptId;
+      }
+      if (typeof parsed.resetGeneration === 'number') {
+        this.resetGeneration = parsed.resetGeneration;
+      }
+      if (typeof parsed.isAttemptCompleted === 'boolean') {
+        this.isAttemptCompleted = parsed.isAttemptCompleted;
+      } else if (
+        parsed.savedPhase === 'RESULTS' ||
+        parsed.savedPhase === 'SEQUENCE_COMPLETE' ||
+        parsed.savedPhase === 'UNLOCK_PRESENTATION'
+      ) {
+        this.isAttemptCompleted = true;
+      }
       if (parsed.savedPhase) this.savedPhase = parsed.savedPhase;
       if (parsed.wispPlacementPhase) this.wispPlacementPhase = parsed.wispPlacementPhase;
       if (typeof parsed.wispsRequiredBeforeSiege === 'boolean') {
         this.wispsRequiredBeforeSiege = parsed.wispsRequiredBeforeSiege;
+      }
+      if (
+        typeof parsed.developerWispCountOverride === 'number' &&
+        parsed.developerWispCountOverride >= 1 &&
+        parsed.developerWispCountOverride <= 5
+      ) {
+        this.developerWispCountOverride = parsed.developerWispCountOverride;
+      } else if (parsed.developerWispCountOverride === null) {
+        this.developerWispCountOverride = null;
       }
       if (typeof parsed.isReinforcementMode === 'boolean') {
         this.isReinforcementMode = parsed.isReinforcementMode;
@@ -2733,22 +3877,30 @@ export class LevelStore {
         this.previousGuidedStep = parsed.currentGuidedStep;
       }
       if (parsed.snapshots) {
+        const migrateSnap = (s: LevelState | null | undefined): LevelState | null =>
+          s ? this.migratePersistedLevelState(s) : null;
         this.snapshots = {
-          LEVEL_TEMPLATE: parsed.snapshots.LEVEL_TEMPLATE ?? deepClone(INITIAL_LEVEL_STATE),
-          STABLE_BUILD: parsed.snapshots.STABLE_BUILD ?? null,
-          INITIAL_DESIGN: parsed.snapshots.INITIAL_DESIGN ?? null,
-          PRE_SIEGE_WISPS: parsed.snapshots.PRE_SIEGE_WISPS ?? null,
-          POST_ATTACK_1: parsed.snapshots.POST_ATTACK_1 ?? null,
-          REINFORCEMENT_ENTRY: parsed.snapshots.REINFORCEMENT_ENTRY ?? null,
-          REINFORCEMENT_COMPLETE: parsed.snapshots.REINFORCEMENT_COMPLETE ?? null,
-          FINAL_RESULT: parsed.snapshots.FINAL_RESULT ?? null,
+          LEVEL_TEMPLATE:
+            migrateSnap(parsed.snapshots.LEVEL_TEMPLATE) ?? deepClone(INITIAL_LEVEL_STATE),
+          STABLE_BUILD: migrateSnap(parsed.snapshots.STABLE_BUILD),
+          INITIAL_DESIGN: migrateSnap(parsed.snapshots.INITIAL_DESIGN),
+          PRE_SIEGE_WISPS: migrateSnap(parsed.snapshots.PRE_SIEGE_WISPS),
+          POST_ATTACK_1: migrateSnap(parsed.snapshots.POST_ATTACK_1),
+          REINFORCEMENT_ENTRY: migrateSnap(parsed.snapshots.REINFORCEMENT_ENTRY),
+          REINFORCEMENT_COMPLETE: migrateSnap(parsed.snapshots.REINFORCEMENT_COMPLETE),
+          FINAL_RESULT: migrateSnap(parsed.snapshots.FINAL_RESULT),
         };
         if (this.snapshots.INITIAL_DESIGN) {
           this.preTestSnapshot = deepClone(this.snapshots.INITIAL_DESIGN);
         }
       }
       if (parsed.lastResults) {
-        this.lastResults = parsed.lastResults;
+        const expectedCount = this.getRequiredWispCount(this.state);
+        if (parsed.lastResults.totalWisps === expectedCount) {
+          this.lastResults = parsed.lastResults;
+        } else {
+          this.lastResults = null;
+        }
       }
     } catch {
       // Ignore corrupted session meta
@@ -2805,7 +3957,14 @@ export class LevelStore {
     if (!data || typeof data !== 'object') return false;
     const candidate = data as Partial<LevelState>;
 
-    if (candidate.schemaVersion !== INITIAL_LEVEL_STATE.schemaVersion) return false;
+    // Accept legacy schemaVersion 1 (5-wisp saves), schemaVersion 2 (3-wisp pre-modular saves), and current schemaVersion 3 for safe migration
+    if (
+      candidate.schemaVersion !== 1 &&
+      candidate.schemaVersion !== 2 &&
+      candidate.schemaVersion !== INITIAL_LEVEL_STATE.schemaVersion
+    ) {
+      return false;
+    }
     if (candidate.levelId !== INITIAL_LEVEL_STATE.levelId) return false;
     if (!Array.isArray(candidate.pieces)) return false;
     if (!Array.isArray(candidate.joints)) {
@@ -2850,16 +4009,23 @@ export class LevelStore {
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem(META_STORAGE_KEY);
         localStorage.removeItem(UNLOCK_STORAGE_KEY);
+        localStorage.removeItem('alchemical_fortress_balance_telemetry_v1');
+        localStorage.removeItem('alchemical_fortress_presentation_settings');
       }
     } catch {
       // Ignore
     }
+    this.developerWispCountOverride = null;
     this.unlockState = {
       tutorialCompleted: false,
       reinforcementReserveUnlocked: false,
       unlockPresentedOnce: false,
     };
-    this.resetToDefault();
+    this.resetLevel();
+  }
+
+  public clearAllPrototypeData(): void {
+    this.clearStorage();
   }
 
   private normalizeAngle(rad: number): number {

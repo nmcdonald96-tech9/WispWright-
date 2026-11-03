@@ -26,11 +26,11 @@ test('TimberJoints Test A: Valid Timber Beam endpoints can snap end-to-end witho
   };
   store.placePiece(beam1, false);
 
-  // Drag a second beam toward beam1's END_B_CENTER (x=320, y=660).
-  // Second beam centered at x=380, y=660 has END_A_CENTER at x=320, y=660.
+  // Drag a second beam toward beam1's END_B_CENTER (x=332, y=660).
+  // Second beam centered at x=404, y=660 has END_A_CENTER at x=332, y=660.
   const snapResult = solveSnapAndValidation(
     'wood_beam',
-    { x: 375, y: 662 },
+    { x: 398, y: 662 },
     0,
     store.getState().pieces,
     store.getState().anchors,
@@ -87,10 +87,10 @@ test('TimberJoints Test B: Vertical End-to-End Post Joint', () => {
   };
   store.placePiece(post1, false);
 
-  // Snap upright beam 2 on top of beam 1
+  // Snap upright beam 2 on top of beam 1 (top at y=628, center of beam 2 at y=556)
   const snapResult = solveSnapAndValidation(
     'wood_beam',
-    { x: 262, y: 585 },
+    { x: 262, y: 561 },
     Math.PI / 2,
     store.getState().pieces,
     store.getState().anchors,
@@ -621,7 +621,7 @@ test('TimberJoints Test K: Joined beam detachment and edit', () => {
   assert.strictEqual(store.getState().pieces.length, 5 + 2); // Pieces still exist
 
   // Moving detached beam freely without joint constraint
-  const moveResult = store.movePiece('b2', { x: 400, y: 660 }, 0, undefined, false);
+  const moveResult = store.movePiece('b2', { x: 425, y: 660 }, 0, undefined, false);
   assert.strictEqual(moveResult, true);
 });
 

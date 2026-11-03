@@ -48,22 +48,21 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
   if (!summary && !results) return null;
 
   const wispsStable = results?.wispsStable ?? summary?.wispsStable ?? 0;
-  const totalWisps = results?.totalWisps ?? summary?.totalWisps ?? 5;
+  const totalWisps = results?.totalWisps ?? summary?.totalWisps ?? 3;
+  const minForCompletion = results?.minimumStableWispsForCompletion ?? Math.max(1, Math.min(totalWisps, totalWisps === 3 ? 2 : Math.ceil(totalWisps * 0.6)));
   const wispsDispersed = results?.wispsDispersed ?? totalWisps - wispsStable;
   const survived = wispsStable >= 1;
   const tutorialCompletionAwarded = Boolean(results?.tutorialCompletionAwarded);
-  const isNarrowSurvival = survived && wispsStable < 3;
+  const isNarrowSurvival = survived && wispsStable < minForCompletion;
   const classification =
     results?.classification ??
-    (wispsStable === 5
+    (wispsStable === totalWisps
       ? 'Exceptional Defense'
-      : wispsStable === 4
-        ? 'Strong Defense'
-        : wispsStable === 3
-          ? 'Successful Defense'
-          : wispsStable >= 1
-            ? 'Narrow Survival'
-            : 'Defense Failed');
+      : wispsStable >= minForCompletion
+        ? 'Successful Defense'
+        : wispsStable >= 1
+          ? 'Narrow Survival'
+          : 'Defense Failed');
 
   const piecesIntact = results?.piecesIntact ?? summary?.piecesIntact ?? 0;
   const piecesCracked = results?.piecesCracked ?? summary?.piecesCracked ?? 0;
@@ -141,7 +140,7 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
                   {tutorialCompletionAwarded
                     ? 'Level 1 Complete · Sanctuary Held'
                     : isNarrowSurvival
-                      ? 'Narrow Survival · Protect 3+ Wisps to Complete Level 1'
+                      ? `Narrow Survival · Protect ${minForCompletion}+ Wisps to Complete Level 1`
                       : survived
                         ? 'Sanctuary Survived · Complete Tutorial Checklist'
                         : 'Level 1 Outcome · Sanctuary Breached'}
@@ -153,10 +152,10 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
                   {tutorialCompletionAwarded
                     ? `${wispsStable} of ${totalWisps} elemental wisps survived both siege waves.`
                     : isNarrowSurvival
-                      ? `${wispsStable} of ${totalWisps} wisps held, but at least 3 wisps must remain stable to complete Level 1.`
+                      ? `${wispsStable} of ${totalWisps} wisps held, but at least ${minForCompletion} wisps must remain stable to complete Level 1.`
                       : survived
                         ? `${wispsStable} of ${totalWisps} wisps survived.`
-                        : 'All 5 elemental wisps were dispersed during the siege.'}
+                        : `All ${totalWisps} elemental wisps were dispersed during the siege.`}
                 </p>
               </div>
             </div>
@@ -365,10 +364,10 @@ export const SiegeCompleteModal: React.FC<SiegeCompleteModalProps> = ({
                 <button
                   onClick={onStartOver}
                   className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 font-bold text-xs active:scale-98 transition-all cursor-pointer"
-                  title="Reset to clean Level 1 template with full starting inventory"
+                  title="Reset Level: Clean Level 1 template with full starting inventory"
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Start Over</span>
+                  <span>Reset Level</span>
                 </button>
               </div>
 

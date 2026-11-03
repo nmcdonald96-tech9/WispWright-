@@ -120,17 +120,23 @@ console.log('=== PHASE 4: CHARACTER & PRESENTATION VERTICAL SLICE ACCEPTANCE SUI
   const pd = new PresentationDirector();
 
   pd.update(0.016, 1.0, store.getState(), sc, null, 'CONSTRUCTION');
+  assert(pd.wispStates.size === 3, 'Test C: Level 1 default has 3 active wisp states');
   const ignis = pd.wispStates.get('wisp_ignis');
   const zephyr = pd.wispStates.get('wisp_zephyr');
-  const terran = pd.wispStates.get('wisp_terran');
   const marinus = pd.wispStates.get('wisp_marinus');
-  const aetheris = pd.wispStates.get('wisp_aetheris');
 
   assert(ignis?.isHero === true && ignis.tendency === 'BRAVE', 'Test C: Ignis must be Hero Wisp (BRAVE)');
   assert(zephyr?.isHero === false && zephyr.tendency === 'EASILY_DISTRACTED', 'Test C: Zephyr tendency');
-  assert(terran?.isHero === false && terran.tendency === 'SERIOUS', 'Test C: Terran tendency');
   assert(marinus?.isHero === false && marinus.tendency === 'NERVOUS', 'Test C: Marinus tendency');
+
+  // Verify full 5-wisp roster when developer override = 5
+  store.setDeveloperWispCountOverride(5);
+  pd.update(0.016, 1.0, store.getState(), sc, null, 'CONSTRUCTION');
+  const terran = pd.wispStates.get('wisp_terran');
+  const aetheris = pd.wispStates.get('wisp_aetheris');
+  assert(terran?.isHero === false && terran.tendency === 'SERIOUS', 'Test C: Terran tendency');
   assert(aetheris?.isHero === false && aetheris.tendency === 'CURIOUS', 'Test C: Aetheris tendency');
+  store.setDeveloperWispCountOverride(null);
 
   // Verify reaction priority during Enemy Intro & Flight
   sc.startSiege(true);
@@ -141,7 +147,7 @@ console.log('=== PHASE 4: CHARACTER & PRESENTATION VERTICAL SLICE ACCEPTANCE SUI
   );
 
   sc.teardown();
-  console.log('PASS [Test C]: Hero Wisp (Ignis) & 4 Companion Wisps personalities and reactions verified.');
+  console.log('PASS [Test C]: Hero Wisp (Ignis) & Companion Wisps personalities and reactions verified.');
 }
 
 // --- TEST D: Wisp Dispersal Presentation ---

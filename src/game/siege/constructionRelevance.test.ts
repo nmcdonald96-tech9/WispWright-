@@ -130,7 +130,7 @@ async function runTests(): Promise<void> {
     'Test B: store.unlockState.tutorialCompleted must remain false on no-build baseline',
   );
   console.log(
-    `  PASS: Dev No-Build Baseline -> Wisps After Atk1=${telB.wispsAfterAttack1}/5, After Atk2=${telB.wispsAfterAttack2}/5, Band="${telB.finalResultBand}", tutorialCompletionAwarded=${resB.tutorialCompletionAwarded}\n`,
+    `  PASS: Dev No-Build Baseline -> Wisps After Atk1=${telB.wispsAfterAttack1}/3, After Atk2=${telB.wispsAfterAttack2}/3, Band="${telB.finalResultBand}", tutorialCompletionAwarded=${resB.tutorialCompletionAwarded}\n`,
   );
 
   // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ async function runTests(): Promise<void> {
   assert(telC.playerPiecesPlacedBeforeAttack1 === 2, 'Test C: Expected 2 player pieces placed');
   assert(telC.stabilityTestCompleted === true, 'Test C: Expected stabilityTestCompleted === true');
   console.log(
-    `  PASS: Minimal Compliant Build -> Wisps After Atk1=${telC.wispsAfterAttack1}/5, After Atk2=${telC.wispsAfterAttack2}/5, Band="${resC.classification}", tutorialCompletionAwarded=${resC.tutorialCompletionAwarded}\n`,
+    `  PASS: Minimal Compliant Build -> Wisps After Atk1=${telC.wispsAfterAttack1}/3, After Atk2=${telC.wispsAfterAttack2}/3, Band="${resC.classification}", tutorialCompletionAwarded=${resC.tutorialCompletionAwarded}\n`,
   );
 
   // ---------------------------------------------------------------------------
@@ -272,15 +272,15 @@ async function runTests(): Promise<void> {
     `Test D: Full build wisp survival (${resD.wispsStable}) must be measurably better than no-build baseline (${telB.wispsAfterAttack2})`,
   );
   assert(
-    resD.wispsStable >= 3,
-    `Test D: Expected at least 3 wisps stable on full build, got ${resD.wispsStable}`,
+    resD.wispsStable >= 2,
+    `Test D: Expected at least 2 wisps stable on full build, got ${resD.wispsStable}`,
   );
   assert(
     resD.tutorialCompletionAwarded === true,
-    'Test D: Full-inventory build with 3+ wisps must award tutorialCompletionAwarded = true',
+    'Test D: Full-inventory build with 2+ wisps must award tutorialCompletionAwarded = true',
   );
   console.log(
-    `  PASS: Full-Inventory Build -> Placed=${telD.playerPiecesPlacedBeforeAttack1}, Wisps After Atk1=${telD.wispsAfterAttack1}/5, After Atk2=${telD.wispsAfterAttack2}/5 (vs No-Build ${telB.wispsAfterAttack2}/5), Band="${resD.classification}", tutorialCompletionAwarded=${resD.tutorialCompletionAwarded}\n`,
+    `  PASS: Full-Inventory Build -> Placed=${telD.playerPiecesPlacedBeforeAttack1}, Wisps After Atk1=${telD.wispsAfterAttack1}/3, After Atk2=${telD.wispsAfterAttack2}/3 (vs No-Build ${telB.wispsAfterAttack2}/3), Band="${resD.classification}", tutorialCompletionAwarded=${resD.tutorialCompletionAwarded}\n`,
   );
 
   // ---------------------------------------------------------------------------
@@ -291,25 +291,25 @@ async function runTests(): Promise<void> {
   siege.startOver();
   siege.setDevBypassTutorialRequirements(false);
 
-  // Place 1 stone block + 1 wood block + 1 beam before Attack 1, retaining 9 pieces in reserve
+  // Place 1 stone block + 1 wood block + 1 roof beam before Attack 1, retaining 9 pieces in reserve
   store.placePiece({
     id: 'player_piece_e_stone_1',
     type: 'stone_block',
-    position: { x: 152, y: 756 },
+    position: { x: 104, y: 756 },
     rotation: 0,
     isPrebuilt: false,
   });
   store.placePiece({
     id: 'player_piece_e_wood_1',
     type: 'wood_block',
-    position: { x: 152, y: 708 },
+    position: { x: 152, y: 756 },
     rotation: 0,
     isPrebuilt: false,
   });
   store.placePiece({
     id: 'player_piece_e_beam_1',
     type: 'wood_beam',
-    position: { x: 684, y: 768 },
+    position: { x: 200, y: 672 },
     rotation: 0,
     isPrebuilt: false,
   });
@@ -323,14 +323,14 @@ async function runTests(): Promise<void> {
     const placedReinf1 = store.placePiece({
       id: 'player_piece_e_reinf_stone_1',
       type: 'stone_block',
-      position: { x: 248, y: 756 },
+      position: { x: 152, y: 708 },
       rotation: 0,
       isPrebuilt: false,
     });
     const placedReinf2 = store.placePiece({
       id: 'player_piece_e_reinf_stone_2',
       type: 'stone_block',
-      position: { x: 104, y: 756 },
+      position: { x: 104, y: 708 },
       rotation: 0,
       isPrebuilt: false,
     });
@@ -348,27 +348,27 @@ async function runTests(): Promise<void> {
     `Test E: Expected 2 reinforcement materials used, got ${resE.reinforcementMaterialsUsed}`,
   );
   assert(
-    resE.wispsStable >= 3,
-    `Test E: Expected >= 3 wisps stable after reinforcement, got ${resE.wispsStable}`,
+    resE.wispsStable >= 2,
+    `Test E: Expected >= 2 wisps stable after reinforcement, got ${resE.wispsStable}`,
   );
   assert(
     resE.tutorialCompletionAwarded === true,
-    'Test E: Compliant reserved-inventory build with 3+ wisps must award tutorialCompletionAwarded = true',
+    'Test E: Compliant reserved-inventory build with 2+ wisps must award tutorialCompletionAwarded = true',
   );
   console.log(
-    `  PASS: Reserved-Inventory Build -> ReserveBeforeAtk1=${telE.piecesRetainedInReserveBeforeAttack1}, ReinfUsed=${resE.reinforcementMaterialsUsed}, WispsAfterAtk2=${resE.wispsStable}/5, Band="${resE.classification}", tutorialCompletionAwarded=${resE.tutorialCompletionAwarded}\n`,
+    `  PASS: Reserved-Inventory Build -> ReserveBeforeAtk1=${telE.piecesRetainedInReserveBeforeAttack1}, ReinfUsed=${resE.reinforcementMaterialsUsed}, WispsAfterAtk2=${resE.wispsStable}/3, Band="${resE.classification}", tutorialCompletionAwarded=${resE.tutorialCompletionAwarded}\n`,
   );
 
   // ---------------------------------------------------------------------------
-  // TEST F: Narrow Survival (1-2 Wisps Survive)
+  // TEST F: Narrow Survival (1 Wisp Survives)
   // ---------------------------------------------------------------------------
-  console.log('Running Test F: Narrow Survival Boundary (1-2 Wisps)...');
+  console.log('Running Test F: Narrow Survival Boundary (1 Wisp)...');
   store.clearStorage();
   siege.startOver();
   siege.setDevBypassTutorialRequirements(false);
 
   // Place a minimal compliant build (1 lower stone block at x=150, y=756 + 1 beam at x=684, y=768)
-  // without upper bracing or mid-siege reinforcement, producing a 2/5 Narrow Survival result.
+  // without upper bracing or mid-siege reinforcement, producing a 1/3 Narrow Survival result.
   store.placePiece({
     id: 'player_piece_f_west_block',
     type: 'stone_block',
@@ -392,17 +392,17 @@ async function runTests(): Promise<void> {
 
   const resF = siege.level1Results!;
   assert(
-    resF.wispsStable === 1 || resF.wispsStable === 2,
-    `Test F: Expected 1 or 2 wisps stable for Narrow Survival, got ${resF.wispsStable}`,
+    resF.wispsStable === 1,
+    `Test F: Expected 1 wisp stable for Narrow Survival, got ${resF.wispsStable}`,
   );
-  assert(resF.survived === true, 'Test F: Physical survival must be true for 1-2 wisps');
+  assert(resF.survived === true, 'Test F: Physical survival must be true for 1 wisp');
   assert(
     resF.classification === 'Narrow Survival',
     `Test F: Expected classification 'Narrow Survival', got '${resF.classification}'`,
   );
   assert(
     resF.tutorialCompletionAwarded === false,
-    'Test F: Narrow Survival (1-2 wisps) must NOT award full Level 1 tutorial completion',
+    'Test F: Narrow Survival (1 wisp) must NOT award full Level 1 tutorial completion',
   );
   assert(
     Boolean(resF.failureObservation && resF.failureObservation.includes('Narrow Survival')),
@@ -416,23 +416,23 @@ async function runTests(): Promise<void> {
     'Test F: Retry Design must preserve the 2 submitted player pieces',
   );
   console.log(
-    `  PASS: Narrow Survival (${resF.wispsStable}/5 wisps) -> survived=${resF.survived}, classification="${resF.classification}", tutorialCompletionAwarded=${resF.tutorialCompletionAwarded}, Hint="${resF.failureObservation}"\n`,
+    `  PASS: Narrow Survival (${resF.wispsStable}/3 wisps) -> survived=${resF.survived}, classification="${resF.classification}", tutorialCompletionAwarded=${resF.tutorialCompletionAwarded}, Hint="${resF.failureObservation}"\n`,
   );
 
   // ---------------------------------------------------------------------------
-  // TEST G: Successful Defense (3+ Wisps + Checklist Complete)
+  // TEST G: Successful Defense (2+ Wisps + Checklist Complete)
   // ---------------------------------------------------------------------------
   console.log('Running Test G: Successful Defense & Tutorial Completion Award...');
   assert(
-    resD.wispsStable >= 3 && resD.tutorialCompletionAwarded === true,
-    'Test G: Full defense with 3+ wisps and completed checklist must award tutorialCompletionAwarded',
+    resD.wispsStable >= 2 && resD.tutorialCompletionAwarded === true,
+    'Test G: Full defense with 2+ wisps and completed checklist must award tutorialCompletionAwarded',
   );
   assert(
     resD.sampleUnlockGranted === true,
     'Test G: First successful tutorial completion must grant sampleUnlockGranted',
   );
   console.log(
-    `  PASS: Successful Defense -> wispsStable=${resD.wispsStable}/5, classification="${resD.classification}", tutorialCompletionAwarded=${resD.tutorialCompletionAwarded}, sampleUnlockGranted=${resD.sampleUnlockGranted}\n`,
+    `  PASS: Successful Defense -> wispsStable=${resD.wispsStable}/3, classification="${resD.classification}", tutorialCompletionAwarded=${resD.tutorialCompletionAwarded}, sampleUnlockGranted=${resD.sampleUnlockGranted}\n`,
   );
 
   // ---------------------------------------------------------------------------

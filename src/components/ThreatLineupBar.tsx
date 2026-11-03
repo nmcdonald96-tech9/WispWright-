@@ -43,6 +43,8 @@ interface ThreatLineupBarProps {
   tutorialGateWarning?: string | null;
   presentationMode?: PresentationMode;
   snapping?: boolean;
+  activeConnectionHint?: string | null;
+  onDismissConnectionHint?: () => void;
   onAdvanceIntro: () => void;
   onSkipIntro: () => void;
   onBeginReinforcement: () => void;
@@ -126,6 +128,8 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
   tutorialGateWarning,
   presentationMode = 'PLAYER',
   snapping = true,
+  activeConnectionHint,
+  onDismissConnectionHint,
   onAdvanceIntro,
   onSkipIntro,
   onBeginReinforcement,
@@ -271,14 +275,14 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
               <div className="flex items-center gap-1" title="Placed Elemental Wisps">
                 <Sparkles className="w-3 h-3 text-emerald-400 shrink-0" />
                 <span className="font-bold text-emerald-300 whitespace-nowrap">
-                  Placed Wisps: {state.wisps.filter((w) => w.placed === true).length}/{state.wisps.length}
+                  Place Wisps: {state.wisps.filter((w) => w.placed === true).length}/{state.wisps.length}
                 </span>
               </div>
             ) : (
               <div className="flex items-center gap-1" title="Surviving Elemental Wisps">
                 <Heart className="w-3 h-3 text-emerald-400 fill-emerald-400" />
                 <span className="font-bold text-emerald-300 whitespace-nowrap">
-                  Surviving Wisps: {stableWisps}/{state.wisps.length}
+                  Wisps stable: {stableWisps}/{state.wisps.length}
                 </span>
               </div>
             )}
@@ -429,7 +433,7 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs text-slate-200">
                 <span className="font-bold text-amber-300">Level 1 · Sanctuary Defense: </span>
-                Complete the unfinished fortress to shield the 5 elemental wisps from 2 incoming siege waves.
+                Three wisps are depending on this shelter. Complete the fortress to shield them from 2 incoming siege waves.
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button
@@ -453,7 +457,7 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs text-slate-200">
                 <span className="font-bold text-emerald-300">Protect the Wisps: </span>
-                Keep at least 1 wisp safe to survive. Heavy falling stone or direct hits will disperse them!
+                Three wisps are depending on this shelter. Place all three wisps after stability testing and keep at least 2 stable!
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button
@@ -544,6 +548,24 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
         <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-900/95 border border-amber-500/50 text-amber-200 px-2.5 py-1 rounded-lg text-[11px] font-semibold shadow-md self-center">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
           <span>{statusFeedback || visibleReloadNotice}</span>
+        </div>
+      )}
+
+      {/* 4. Non-Blocking One-Time Connection Discovery Hint */}
+      {activeConnectionHint && !statusFeedback && (
+        <div className="pointer-events-auto flex items-center justify-between gap-2 bg-emerald-950/92 border border-emerald-500/50 text-emerald-100 px-2.5 py-1 rounded-lg text-[10.5px] font-medium shadow-md self-center max-w-md">
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>{activeConnectionHint}</span>
+          </div>
+          {onDismissConnectionHint && (
+            <button
+              onClick={onDismissConnectionHint}
+              className="px-1.5 py-0.5 rounded bg-emerald-900/80 hover:bg-emerald-800 text-emerald-200 text-[9.5px] font-bold shrink-0 cursor-pointer"
+            >
+              Got it
+            </button>
+          )}
         </div>
       )}
     </div>

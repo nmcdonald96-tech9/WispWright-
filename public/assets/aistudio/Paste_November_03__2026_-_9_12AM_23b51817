@@ -1,0 +1,992 @@
+FORGIVING ARCHITECTURAL SNAP, STRESS-FREE JOINT CLOSURE, AND ORDINARY-LOAD STABILITY
+
+The modular construction geometry milestone is partially implemented and has
+meaningfully improved the builder:
+
+- Angled rafters can approach block corners.
+- Opposing rafters can form a Roof Peak candidate.
+- Lower corner connections can sometimes be created.
+- Peaked-roof geometry is now visually recognizable.
+- Modular corner and face features exist.
+- Existing construction, siege, wisp placement, reinforcement, and persistence
+  systems remain functional.
+
+However, real-device testing shows that a visually reasonable and apparently
+fully connected peaked roof can still be extremely difficult to assemble and may
+fall apart immediately under ordinary gravity.
+
+This task must refine the existing modular architecture rather than create a
+second snap or joint system.
+
+Do not add new gameplay mechanics, materials, levels, projectiles, progression,
+monetization, or final visual assets.
+
+PRODUCT GOAL
+
+The player should be able to freely arrange pieces into an obvious architectural
+structure and receive forgiving, predictable assistance.
+
+If a structure clearly represents a reasonable supported peaked roof:
+
+- The builder should recognize that intent.
+- Lower rafter ends should connect or seat consistently.
+- The roof peak should close cleanly.
+- Minor geometric mismatch should be resolved through a small previewed
+  correction.
+- Newly created joints should begin without artificial stored strain.
+- The roof should survive ordinary gravity when both supports are stable.
+- The roof should remain vulnerable to weak foundations, missing supports,
+  excessive load, spreading walls, and projectile impact.
+
+The player must not be required to solve sub-pixel geometry or understand
+endpoint A versus endpoint B, left versus right corner implementation, source
+versus target ownership, or placement-order quirks.
+
+PRESERVE
+
+Preserve all accepted behavior:
+
+- Authoritative logical game state
+- Inventory-to-world dragging
+- Tap-to-place accessibility
+- Inventory accounting
+- Manual rotation ownership
+- Rotation transaction and sweep validation
+- Automatic connected-piece editing
+- Cancel restoring exact transforms and joint graph
+- Modular piece definitions
+- Existing corner and face geometry
+- Existing Timber Splice joints
+- Existing Timber Face joints
+- Existing Timber Corner joints
+- Existing Rafter Corner Seat candidates
+- Existing Roof Peak joints
+- Existing Diagonal Brace joints
+- Existing T-joints
+- Supported contact
+- Environmental anchors
+- Undo and redo
+- Stability testing
+- Build phase without wisps
+- Post-build wisp placement
+- Enclosed wisp placement
+- Three-wisp Level 1
+- Wisp–debris contact severity
+- Projectile targeting and ballistics
+- Reinforcement
+- Bullseye behavior
+- Tactical, Follow, and POV camera modes
+- Results
+- Retry Design
+- Start Over
+- Reset Level
+- Attempt-ID and startup authority
+- Persistence and migration
+- Existing automated test suites
+
+Do not change:
+
+- Global gravity
+- Material durability
+- Projectile mass or velocity
+- Damage formulas
+- Wisp dispersal thresholds
+- Starting inventory
+- Level 1 attack sequence
+- Result bands
+- Joint strength merely to conceal invalid geometry
+
+CONFIRMED DEVICE-TEST FINDINGS
+
+1. MIRRORED LOWER CONNECTIONS ARE INCONSISTENT
+
+A left rafter endpoint may connect successfully to a wooden block’s upper-right
+corner, shown by a committed connection marker.
+
+The mirrored right rafter endpoint may fail to connect to the wooden block’s
+upper-left corner, even when the geometry appears equivalent.
+
+The right connection may:
+
+- Remain a candidate only
+- Fail to commit
+- Prefer a farther face location
+- Depend on placement order
+- Require excessive manual precision
+
+The resulting stability behavior differs because one lower joint exists and the
+other does not.
+
+2. PLACEMENT ORDER AFFECTS CONNECTION SUCCESS
+
+Moving a rafter endpoint toward a stationary block corner may succeed.
+
+Moving a block corner beneath a stationary rafter endpoint may fail.
+
+Equivalent final geometry must produce equivalent committed relationships,
+regardless of which piece was active.
+
+3. VISUAL CONSTRUCTION STATE IS AMBIGUOUS
+
+Candidate, supported-contact, and committed-joint markers are not sufficiently
+distinct.
+
+A player may reasonably believe that both lower rafter connections are committed
+when only one exists authoritatively.
+
+4. EXACT TRIANGLE CLOSURE IS OFTEN IMPOSSIBLE
+
+Fixed beam length, support spacing, support height, and selected angles do not
+always form a mathematically exact triangle.
+
+Correcting the peak can move a lower endpoint away from its support.
+
+Correcting a lower endpoint can create an offset or overlap at the peak.
+
+The player should not have to calculate exact trigonometric closure.
+
+5. APPARENTLY CONNECTED ROOFS MAY BEGIN WITH INTERNAL STRAIN
+
+A roof can visually show:
+
+- Left lower connection
+- Roof Peak connection
+- Right lower connection
+
+yet immediately fall apart during stability testing.
+
+Possible causes include:
+
+- Rest geometry differs from committed visible geometry
+- Constraint anchors are initialized at stale socket positions
+- One joint is only aligned contact rather than a real joint
+- Mirrored corner normals are inconsistent
+- The joint begins beyond its effective separation or angular tolerance
+- Existing positional error becomes stored spring force
+- Constraint creation order loads one side before the full assembly exists
+
+6. THE DESIRED EXPERIENCE IS FORGIVING, NOT INDESTRUCTIBLE
+
+A reasonably aligned, supported roof should not fall apart solely under the
+ordinary weight of its own timber pieces.
+
+A missing support, unstable wall, long unsupported span, heavy added load, or
+projectile strike must still be capable of causing failure.
+
+PRIMARY OBJECTIVES
+
+1. Make mirrored corner relationships geometrically equivalent.
+2. Make connection recognition independent of source/target ownership.
+3. Make connection recognition independent of placement order.
+4. Distinguish candidate, supported contact, and committed joint clearly.
+5. Add forgiving architectural closure for near-valid roof assemblies.
+6. Initialize new joints with stress-free rest geometry based on the final
+   committed transforms.
+7. Commit a complete roof closure atomically where appropriate.
+8. Make a visibly reasonable supported roof survive ordinary gravity.
+9. Preserve vulnerability to missing supports, weak foundations, load, and
+   attack.
+10. Preserve all accepted state, physics, editing, and persistence behavior.
+
+OUT OF SCOPE
+
+Do not implement:
+
+- New construction pieces
+- New materials
+- Metal brackets
+- Rope
+- Joint repairs
+- Fortress visual transformation
+- Automatic fortress generation
+- New attacks
+- Wind machine
+- New Bullseye behavior
+- Progression
+- Multiplayer
+- Advertising
+- Final art
+
+MIRRORED FEATURE PARITY
+
+Audit every mirrored block and beam feature.
+
+For each block:
+
+- TOP_LEFT_CORNER
+- TOP_RIGHT_CORNER
+- BOTTOM_LEFT_CORNER
+- BOTTOM_RIGHT_CORNER
+- LEFT_FACE
+- RIGHT_FACE
+- TOP_FACE
+- BOTTOM_FACE
+
+For each beam endpoint:
+
+- END_A and END_B
+- Inner and outer corners
+- Endpoint face normals
+- Local-to-world transforms
+
+Confirm that mirrored features differ only by the correct sign or mirrored local
+coordinate.
+
+Do not maintain manually duplicated formulas when one mirrored derivation can be
+used safely.
+
+Add invariants:
+
+- Mirroring a valid left-corner candidate produces an equivalent right-corner
+  candidate.
+- Mirroring twice returns the original feature.
+- Candidate score components are equivalent under mirrored geometry.
+- Final snap corrections mirror correctly.
+- Connection type and strength profile remain equivalent.
+
+SOURCE/TARGET SYMMETRY
+
+Connection validity must depend on final geometric relationship, not which piece
+was dragged.
+
+For every compatible relationship, evaluate both formulations:
+
+- Moving rafter endpoint to stationary block corner
+- Moving block corner to stationary rafter endpoint
+
+Normalize both into one canonical relationship description.
+
+Suggested canonical fields:
+
+- Piece A ID
+- Feature A ID
+- Piece B ID
+- Feature B ID
+- Connection type
+- Final transform A
+- Final transform B
+- Shared seam or anchor point
+- Rest geometry
+- Strength profile
+- Support classification
+
+Use stable piece IDs only for deterministic ordering, not for geometry bias.
+
+Equivalent final transforms must produce equivalent committed connections.
+
+PLACEMENT-ORDER INDEPENDENCE
+
+Test these orders:
+
+1. Left support, then left rafter
+2. Left rafter, then left support
+3. Right support, then right rafter
+4. Right rafter, then right support
+5. Both supports before both rafters
+6. Rafters before moving supports beneath them
+7. Left side first
+8. Right side first
+
+If final geometry is equivalent within tolerance:
+
+- Connection type must match.
+- Joint profile must match.
+- Rest geometry must match.
+- Stability behavior must be equivalent.
+- Mirrored candidate markers must match.
+
+CONNECTION-STATE CLARITY
+
+Provide distinct player-facing states.
+
+CANDIDATE PREVIEW
+
+- Not yet committed
+- Dashed or pulsing marker
+- Label such as “Corner connection available”
+- Disappears if the player moves away
+- Creates no logical joint
+
+POSITIONAL ALIGNMENT
+
+- Piece is aligned geometrically
+- No structural joint
+- Distinct alignment marker
+- Label: “Aligned”
+
+SUPPORTED CONTACT
+
+- Gravity/contact relationship only
+- Distinct support marker
+- Label: “Supported”
+- No physical joint constraint
+
+COMMITTED JOINT
+
+- Solid marker
+- Label appropriate to type:
+  - Corner Joint
+  - Roof Peak
+  - Timber Joint
+  - Brace
+  - Anchor
+- Exists in the logical joint graph
+- Will instantiate a physics constraint during stability testing
+
+STRAINED JOINT
+
+- Committed but under meaningful load during live physics
+- Uses the existing strain presentation
+- Must not be confused with an uncommitted candidate
+
+Do not rely only on color.
+
+In Developer Presentation, show:
+
+- Joint ID
+- Connection type
+- Candidate versus committed
+- Source and target features
+- Rest geometry
+
+FORGIVING ARCHITECTURAL CLOSURE
+
+Introduce a centralized architectural closure tolerance expressed in world
+construction units.
+
+The tolerance must not use screen pixels.
+
+Define separate limits for:
+
+- Endpoint/corner position mismatch
+- Face seam gap
+- Angle mismatch
+- Balanced positional correction
+- Maximum movement of an already committed editable piece
+
+Classify proposed structures:
+
+EXACT
+
+- Already within strict geometry tolerance
+- Commit with minimal or no correction
+
+FORGIVING
+
+- Slightly outside exact tolerance
+- Clearly expresses one architectural intent
+- Small correction produces valid non-overlapping geometry
+- Preview correction before commit
+- Commit as stress-free geometry
+
+AMBIGUOUS
+
+- Multiple materially different relationships are similarly plausible
+- Use candidate ranking and optional candidate cycling
+
+INVALID
+
+- Requires excessive correction
+- Creates overlap
+- Moves fixed geometry
+- Moves supports beyond the documented limit
+- Produces visibly lopsided closure
+- Crosses terrain or wisps
+- Violates boundaries
+
+Document all selected tolerance values.
+
+Do not make the tolerance so broad that unrelated pieces connect across obvious
+gaps.
+
+ROOF-ASSEMBLY RECOGNITION
+
+When the builder contains:
+
+- Two opposed rafter beams
+- One possible shared peak
+- One lower support candidate for each rafter
+
+recognize a potential ROOF_ASSEMBLY preview.
+
+This is a construction-assistance concept, not a new rigid physics body.
+
+The logical pieces and joints remain distinct.
+
+ROOF_ASSEMBLY preview may contain:
+
+- Left rafter
+- Right rafter
+- Left lower support relationship
+- Right lower support relationship
+- Peak relationship
+- Proposed correction vectors
+- Support status
+- Joint types
+- Closure quality
+
+The preview should identify:
+
+- Complete supported roof
+- Peak connected but left support missing
+- Peak connected but right support missing
+- Both lower supports present but peak unresolved
+- Ambiguous closure
+- Invalid closure
+
+Do not force the player to complete the entire roof at once.
+
+ATOMIC ROOF CLOSURE
+
+When all three relationships are near-valid:
+
+1. Calculate one coherent final assembly solution.
+2. Preserve both selected rafter angles unless the player explicitly accepts an
+   angle adjustment.
+3. Apply small positional correction across editable components.
+4. Prefer balanced correction between two editable rafters.
+5. Avoid moving stable support blocks unless the player is actively moving a
+   support and the correction is very small.
+6. Do not move fixed/prebuilt pieces.
+7. Validate all colliders.
+8. Validate boundaries and terrain.
+9. Validate wisp clearance during reinforcement.
+10. Preview the final complete connection set.
+11. On release, commit all affected transforms and joints atomically.
+12. Create one undoable operation.
+13. On cancel, restore every prior transform and joint exactly.
+
+Do not commit one joint, run physics assumptions against it, then commit the next
+joint with residual strain.
+
+STRESS-FREE REST GEOMETRY
+
+This is a critical requirement.
+
+After final transforms are selected and validated:
+
+- Derive each joint’s rest position from the final committed world geometry.
+- Derive rest angle from the final committed relative orientation.
+- Derive seam position from the final committed faces/corners.
+- Initialize linear and angular error at or near zero.
+- Do not reuse stale candidate coordinates.
+- Do not initialize the peak before balanced correction completes.
+- Do not initialize lower joints from pre-correction transforms.
+- Do not store construction snap correction as spring displacement.
+
+Before stability testing, provide a diagnostic:
+
+- Initial joint positional error
+- Initial angular error
+- Initial stored spring/constraint energy
+
+For a newly committed valid roof:
+
+- Positional error should be within a very small numerical tolerance.
+- Angular error should be within a very small numerical tolerance.
+- Stored constraint energy should be effectively zero.
+
+Gravity may then create real physical stress after simulation begins.
+
+STABILITY-TEST ACTIVATION
+
+When Test Stability begins:
+
+1. Freeze the accepted logical roof snapshot.
+2. Create all bodies at final committed transforms.
+3. Clear stale velocities and impulses.
+4. Create all roof constraints from final rest geometry.
+5. Do not advance physics between creating the first and last roof joint.
+6. Activate the complete constraint set before the first simulation step.
+7. Start gravity and simulation.
+8. Record initial joint errors and forces.
+9. Allow normal settling.
+
+This prevents connection-order bias where one joint loads the structure before
+the remaining roof relationships exist.
+
+ORDINARY-LOAD STABILITY CONTRACT
+
+A valid supported roof should survive ordinary gravity when:
+
+- Both rafters are ordinary Timber Beams
+- One Roof Peak Joint exists
+- Both lower rafter ends are committed or validly supported
+- Lower support pieces are stable enough not to tip immediately
+- No excessive additional load exists
+- No initial overlap exists
+- No joint begins with artificial strain
+
+“Survive ordinary gravity” means:
+
+- The roof may settle slightly.
+- Joints may flex modestly.
+- Small movement is acceptable.
+- The roof remains assembled.
+- It does not immediately separate solely because the test begins.
+
+This is not a guarantee against:
+
+- Unstable free-standing support blocks
+- Narrow walls tipping from horizontal thrust
+- Missing lower support
+- Heavy blocks placed on the roof
+- Long unsupported spans
+- Existing damaged pieces
+- Projectile impact
+
+SUPPORT FOUNDATION CHECK
+
+Before describing a roof as fully supported, evaluate the lower supports.
+
+Classify each support as:
+
+- Fixed environmental support
+- Anchored piece
+- Stable column candidate
+- Free-standing loose block
+- Unstable or unresolved support
+
+Do not block construction solely because a support is free-standing.
+
+Instead, communicate:
+
+- “Rafter connected; support block may tip.”
+- “Both rafters connected; walls are unanchored.”
+- “Roof geometry complete; foundation stability untested.”
+
+This differentiates:
+
+- Missing connection
+- Valid connection on a weak support
+- Strong support
+
+The stability test remains authoritative.
+
+MIRRORED ROOF ACCEPTANCE
+
+For a symmetric roof with equivalent pieces and geometry:
+
+- Left and right lower connection types must match.
+- Left and right joint profiles must match.
+- Initial joint errors must match within numerical tolerance.
+- Marker appearance must mirror.
+- Placement order must not change the final relationship.
+- Gravity behavior should be approximately symmetrical unless support geometry
+  differs.
+
+If one side connects and the mirrored side does not:
+
+- Treat this as a solver defect.
+- Do not attribute it to player skill.
+
+FINE ADJUSTMENT WITHIN A CANDIDATE
+
+When a candidate is locked, allow limited player-controlled nudge rather than
+making the piece immovable.
+
+Provide one or more of:
+
+- Fine drag within the candidate tolerance
+- Temporary “Free Adjust” modifier
+- Compact nudge controls
+- Snap-strength reduction while holding a control
+
+Requirements:
+
+- Candidate remains visible.
+- The player can refine alignment.
+- Moving back within commitment tolerance restores the candidate.
+- Manual rotation remains authoritative.
+- Fine adjustment does not create hidden joint strain.
+- Final committed transform is revalidated.
+
+Do not require pixel-perfect correction.
+
+CANDIDATE COMMIT ASSIST
+
+If the piece is released within FORGIVING range:
+
+- Complete the small correction automatically.
+- Show the corrected final preview before or during release.
+- Create the authoritative committed joint.
+- Do not leave the piece in a visually near-connected but logically detached
+  state.
+
+If automatic correction would exceed tolerance:
+
+- Reject or leave as free placement.
+- Clearly indicate no joint was created.
+
+Do not display a committed-looking solid marker for a detached piece.
+
+OPTIONAL VISUAL JOINT CAPS
+
+Add presentation-only support for small joint-cap visuals:
+
+- Peak cap
+- Corner binding
+- Timber collar
+- Alchemical fastening rune
+
+The cap may bridge a small documented seam visually.
+
+The cap must:
+
+- Be presentation-only
+- Not alter collider geometry
+- Not create extra physical bodies
+- Not hide large invalid gaps
+- Reflect the actual committed joint type
+- Disappear if the joint breaks
+- Never appear for candidate-only or supported-contact states
+
+Do not spend significant effort on final art.
+
+A simple prototype marker/cap is sufficient.
+
+JOINT STRENGTH REVIEW
+
+Do not globally increase strength by default.
+
+First verify stress-free geometry.
+
+Then verify whether the existing joint profiles can support the ordinary mass of
+their intended connected pieces.
+
+A basic Roof Peak and lower corner joint should tolerate:
+
+- The supported weight of one ordinary rafter
+- Small settling forces
+- Modest compression from a basic roof
+
+They should remain vulnerable to:
+
+- Horizontal spreading forces from unstable supports
+- Tension
+- Excessive bending
+- Direct projectile impact
+- Added heavy load
+- Loss of one support
+
+If a minimal strength adjustment is necessary after eliminating artificial
+strain:
+
+- Change the centralized profile only.
+- Document before and after values.
+- Justify the adjustment with measured ordinary-load forces.
+- Rerun projectile-impact and unsupported-roof tests.
+
+Do not tune based on visual preference alone.
+
+UNDO AND REDO
+
+A forgiving or atomic roof closure operation must record:
+
+- Previous transforms of all affected pieces
+- New transforms
+- Previous joint graph
+- New joint graph
+- Previous candidate state, if needed diagnostically
+- Construction revision
+- Closure classification
+- Correction vectors
+
+Undo must restore exact prior transforms and joints.
+
+Redo must restore the accepted closure without duplicate joints or constraints.
+
+Candidate preview, fine nudge, and rejected release create no history entry until
+commit.
+
+REINFORCEMENT
+
+Use the same closure and stress-free initialization rules during reinforcement.
+
+Requirements:
+
+- Surviving intact pieces may form new roof or corner relationships.
+- Broken debris exposes no construction features.
+- Broken joints remain broken unless intact pieces are intentionally arranged
+  into a new valid joint.
+- Surviving wisps block invalid overlap.
+- Fine adjustment cannot move pieces through wisps.
+- Commit remains atomic.
+- Reinforcement history remains isolated.
+
+PERSISTENCE AND RELOAD
+
+Persist committed:
+
+- Final transforms
+- Connection types
+- Joint IDs
+- Rest geometry
+- Strength profile IDs
+- Closure metadata needed for reconstruction
+- Geometry schema version
+
+Do not persist:
+
+- Candidate previews
+- Fine-adjust mode
+- Uncommitted correction vectors
+- Temporary roof-assembly preview
+- Constraint-engine objects
+
+Reload during preview:
+
+- Cancel preview.
+- Restore last committed transforms and joints.
+
+Reload after committed roof closure:
+
+- Restore the same geometry.
+- Rebuild each constraint exactly once.
+- Preserve stress-free rest geometry.
+- Do not introduce new initial strain.
+
+DEVELOPER DIAGNOSTICS
+
+Add or confirm:
+
+- Roof-assembly candidate active
+- Left rafter ID
+- Right rafter ID
+- Left support ID
+- Right support ID
+- Left lower relationship type
+- Right lower relationship type
+- Peak relationship type
+- Candidate versus committed state per relationship
+- Mirrored parity result
+- Source/target canonical relationship
+- Placement-order signature
+- Closure classification: exact / forgiving / ambiguous / invalid
+- Position mismatch per connection
+- Angle mismatch per connection
+- Proposed correction vectors
+- Balanced correction active
+- Final seam gaps
+- Initial joint positional error
+- Initial joint angular error
+- Initial stored constraint energy
+- Lower support classification
+- Ordinary-load force sample
+- Candidate-lock state
+- Fine-adjust state
+- Commit-assist used
+- Joint cap shown
+- Duplicate joint warning
+- Stability-test creation order
+- Constraint count before and after restore
+
+Diagnostics must not change behavior.
+
+AUTOMATED TESTS
+
+Add targeted tests for:
+
+1. Left and right mirrored block corners generate equivalent candidates.
+2. Beam End A and End B work on both upper block corners.
+3. Moving beam to block equals moving block to beam for final connection.
+4. Placement order produces equivalent geometry.
+5. Candidate and committed markers remain distinct.
+6. Supported contact and committed joint remain distinct.
+7. Forgiving-range release commits one intended joint.
+8. Outside-tolerance release does not create a joint.
+9. Fine adjustment retains candidate correctly.
+10. Fine adjustment does not introduce hidden strain.
+11. Symmetric roof closure commits both lower relationships and one peak
+    relation atomically.
+12. Roof closure creates exactly one Roof Peak Joint.
+13. No duplicate splice or face joint exists at the peak.
+14. Newly committed roof joints begin with near-zero positional error.
+15. Newly committed roof joints begin with near-zero angular error.
+16. Newly committed roof constraint energy is near zero.
+17. All roof constraints activate before the first physics step.
+18. Supported roof survives ordinary gravity.
+19. Roof with one missing lower connection fails or shifts naturally.
+20. Roof on unstable free-standing blocks may tip naturally.
+21. Anchored or stable walls improve roof stability.
+22. Removing one support causes physically plausible asymmetric failure.
+23. Excessive roof load may strain or break joints.
+24. Projectile impact may break roof joints.
+25. Cancel restores all transforms and joints.
+26. Undo and redo restore complete assembly.
+27. Reload restores stress-free geometry.
+28. Repeated stability tests do not accumulate energy or constraints.
+29. Reinforcement uses the same closure logic.
+30. Existing modular dimension and corner tests remain passing.
+31. Three-wisp Level 1 remains passing.
+32. Startup/reset authority remains passing.
+33. TypeScript and production build pass.
+34. All existing regression suites remain passing.
+
+ACCEPTANCE SCENARIOS
+
+A. MIRRORED SINGLE-CORNER TEST
+
+- Place one wooden block and one angled rafter at the upper-right corner.
+- Confirm committed Corner Joint.
+- Mirror the arrangement at the upper-left corner.
+- Confirm equivalent committed Corner Joint.
+- Confirm marker parity.
+- Confirm joint-profile parity.
+
+B. SOURCE/TARGET ORDER TEST
+
+For each mirrored corner:
+
+- Move the rafter to the block.
+- Move the block to the rafter.
+
+Confirm equivalent final geometry and joint.
+
+C. VISUALLY REASONABLE SUPPORTED ROOF
+
+- Use two equal wooden supports.
+- Use two equal opposing rafters.
+- Place each lower endpoint near the corresponding upper inner corner.
+- Place upper endpoints near one another.
+- Confirm roof-assembly preview.
+- Confirm both lower relationships and peak relationship.
+- Commit.
+- Run Test Stability.
+- Confirm the roof remains assembled under ordinary gravity if the supports
+  themselves remain upright.
+
+D. FREE-STANDING SUPPORTS
+
+- Use two narrow, unanchored support blocks.
+- Build the same connected roof.
+- Confirm geometry remains connected initially.
+- Run Test Stability.
+- If supports tip under roof thrust, confirm the roof may collapse naturally.
+- Confirm the failure is attributed to support instability rather than a missing
+  connection or artificial joint strain.
+
+E. STABLE OR ANCHORED SUPPORTS
+
+- Use stable columns, anchors, or wider supports.
+- Build the same roof.
+- Confirm ordinary-load stability improves.
+
+F. MISSING LOWER CONNECTION
+
+- Create peak and one lower connection only.
+- Confirm preview identifies the unresolved side.
+- Test stability.
+- Confirm failure or shifting is allowed.
+
+G. FORGIVING CLOSURE
+
+- Build a roof with a small dimensional mismatch.
+- Confirm small previewed correction.
+- Commit.
+- Confirm stress-free rest geometry.
+- Test stability.
+
+H. EXCESSIVE MISMATCH
+
+- Create a visibly lopsided arrangement outside tolerance.
+- Confirm no automatic large correction.
+- Confirm no false committed marker.
+
+I. FINE ADJUSTMENT
+
+- Lock a lower-corner candidate.
+- Nudge the piece.
+- Confirm candidate remains manageable rather than immovable.
+- Commit within tolerance.
+- Confirm valid joint.
+
+J. CANCEL AND UNDO
+
+- Begin roof closure and cancel.
+- Confirm exact restoration.
+- Commit and Undo.
+- Confirm all affected transforms and joints restore.
+- Redo and confirm no duplicates.
+
+K. RELOAD
+
+- Reload after a committed roof.
+- Confirm same geometry and rest state.
+- Test stability.
+- Confirm no added strain.
+
+L. PROJECTILE IMPACT
+
+- Strike the ordinary-load-stable roof.
+- Confirm joints may flex, strain, or break.
+- Confirm cosmetic caps disappear when joints break.
+- Confirm physics remains authoritative.
+
+M. REINFORCEMENT
+
+- Form or adjust a roof connection during reinforcement.
+- Confirm same forgiving behavior.
+- Confirm no overlap with wisps.
+- Confirm history remains isolated.
+
+N. REGRESSION
+
+Run all existing suites:
+
+- Inventory placement
+- Rotation validation
+- Automatic joint editing
+- Modular geometry
+- Timber joints
+- Wisp placement and enclosure
+- Wisp–debris contacts
+- Three-wisp Level 1
+- Startup/reset
+- Siege lifecycle
+- Reinforcement
+- Bullseye
+- Presentation and POV
+- TypeScript
+- Production build
+
+DELIVERY REQUIREMENTS
+
+Create the complete implementation and open the preview.
+
+Report:
+
+1. Files changed
+2. Root cause of mirrored lower-connection inconsistency
+3. Root cause of placement-order dependence
+4. Root cause of visually connected roofs failing immediately
+5. Candidate versus committed-state changes
+6. Architectural closure tolerances
+7. Roof-assembly recognition
+8. Atomic closure implementation
+9. Stress-free rest-geometry implementation
+10. Stability-test activation order
+11. Support-foundation classification
+12. Fine-adjustment behavior
+13. Joint-cap prototype
+14. Any joint-strength changes, with measured justification
+15. Undo, redo, reload, and reinforcement behavior
+16. Automated tests added
+17. Results for acceptance scenarios A through N
+18. Confirmation that material, projectile, wisp, and Level 1 balance remained
+    unchanged
+19. Known limitations
+
+Do not claim this passes merely because the roof remains standing.
+
+It passes only if:
+
+- Mirrored lower connections behave equivalently.
+- Source/target and placement order do not change the relationship.
+- Candidate and committed states are visually distinct.
+- Near-valid roofs receive small predictable correction.
+- Committed joints begin without artificial stored strain.
+- A reasonable supported roof survives ordinary gravity.
+- Weak or unstable foundations can still cause collapse.
+- Missing supports and projectile impacts remain dangerous.
+- Existing state, persistence, siege, and regression behavior remain correct.

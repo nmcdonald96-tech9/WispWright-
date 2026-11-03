@@ -5,8 +5,10 @@
 
 import React, { useState } from 'react';
 import {
+  AttemptBalanceTelemetry,
   ConstructionDiagnostics,
   ConstructionRelevanceTelemetry,
+  DeveloperWispOverrideDiagnostics,
   GameMode,
   InventoryCategory,
   LevelState,
@@ -111,6 +113,11 @@ interface DiagnosticPanelProps {
   onDevForceAttack1BullseyeTest?: () => void;
   onDevForceAttack2ReinforcementRetargetTest?: () => void;
   onDevCompareOrdinaryVsBullseyeTarget?: () => void;
+  // Variable Wisp-Count Override & Balance Observability Telemetry
+  developerWispOverrideDiagnostics?: DeveloperWispOverrideDiagnostics;
+  onSetDeveloperWispCountOverride?: (count: 1 | 2 | 3 | 4 | 5 | null) => void;
+  balanceTelemetryHistory?: AttemptBalanceTelemetry[];
+  onClearBalanceTelemetryHistory?: () => void;
 }
 
 export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
@@ -172,11 +179,16 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
   onDevPlaceBullseyeReinforced,
   onDevPlaceBullseyeExposedDecoy,
   onDevPlaceBullseyeUnreachable,
+  onDevDevResetBullseyeState: _unusedReset,
   onDevResetBullseyeState,
   onDevForceAttack1BullseyeTest,
   onDevForceAttack2ReinforcementRetargetTest,
   onDevCompareOrdinaryVsBullseyeTarget,
-}) => {
+  developerWispOverrideDiagnostics,
+  onSetDeveloperWispCountOverride,
+  balanceTelemetryHistory = [],
+  onClearBalanceTelemetryHistory,
+}: DiagnosticPanelProps & { onDevDevResetBullseyeState?: () => void }) => {
   const [devControlsExpanded, setDevControlsExpanded] = useState(false);
   const [bullseyeControlsExpanded, setBullseyeControlsExpanded] = useState(true);
   const [presControlsExpanded, setPresControlsExpanded] = useState(true);
@@ -605,6 +617,117 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
           </div>
         </div>
 
+        {/* 3A-WISP. Developer Wisp-Count Override & Variable Wisp Diagnostics */}
+        {developerWispOverrideDiagnostics && (
+          <div className="border-t border-teal-800/60 pt-1.5">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-1 text-[10px] font-bold text-teal-300">
+                <Sparkles className="w-3 h-3 text-teal-400" />
+                <span>DEVELOPER WISP-COUNT OVERRIDE</span>
+              </div>
+              <span className="text-[9px] font-bold text-emerald-300">
+                Req: {developerWispOverrideDiagnostics.activeRequiredWispCount} (Ov:{' '}
+                {developerWispOverrideDiagnostics.developerWispCountOverride ?? 'Default 3'})
+              </span>
+            </div>
+            <div className="bg-slate-900/90 rounded p-1.5 space-y-1 text-[9.5px]">
+              <div className="grid grid-cols-6 gap-1">
+                {([1, 2, 3, 4, 5] as const).map((cnt) => {
+                  const isActive =
+                    developerWispOverrideDiagnostics.activeRequiredWispCount === cnt &&
+                    (developerWispOverrideDiagnostics.developerWispCountOverride === cnt ||
+                      (developerWispOverrideDiagnostics.developerWispCountOverride === null &&
+                        cnt === developerWispOverrideDiagnostics.configuredLevelRequiredWispCount));
+                  return (
+                    <button
+                      key={cnt}
+                      onClick={() => onSetDeveloperWispCountOverride?.(cnt)}
+                      className={`py-0.5 px-1 rounded text-[9px] font-bold cursor-pointer border ${
+                        isActive
+                          ? 'bg-teal-600 text-white border-teal-300'
+                          : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                      }`}
+                    >
+                      {cnt} Wisp{cnt > 1 ? 's' : ''}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={() => onSetDeveloperWispCountOverride?.(null)}
+                  className="py-0.5 px-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 text-[8.5px] font-bold cursor-pointer"
+                  title="Reset to Level 1 Default (3 Wisps)"
+                >
+                  Def (3)
+                </button>
+              </div>
+              <div className="flex justify-between pt-0.5">
+                <span className="text-slate-400">Active Wisp IDs:</span>
+                <span className="text-teal-200 font-semibold truncate max-w-[180px]">
+                  {developerWispOverrideDiagnostics.activeWispIds
+                    .map((id) => id.replace('wisp_', ''))
+                    .join(', ')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Placed / Staging / MinComplete:</span>
+                <span className="text-emerald-300 font-bold">
+                  {developerWispOverrideDiagnostics.placedWispCount} placed ·{' '}
+                  {developerWispOverrideDiagnostics.stagingWispCount} stg · min{' '}
+                  {developerWispOverrideDiagnostics.minimumStableWispsForCompletion}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3A-BAL. Observational Balance Telemetry History (Max 25 Runs) */}
+        <div className="border-t border-cyan-900/60 pt-1.5">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-bold text-cyan-300">
+              OBSERVATIONAL BALANCE TELEMETRY ({balanceTelemetryHistory.length}/25)
+            </span>
+            {balanceTelemetryHistory.length > 0 && onClearBalanceTelemetryHistory && (
+              <button
+                onClick={onClearBalanceTelemetryHistory}
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[8.5px] cursor-pointer"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {balanceTelemetryHistory.length > 0 ? (
+            <div className="bg-slate-900/90 rounded p-1.5 space-y-0.5 text-[9px]">
+              {(() => {
+                const latest = balanceTelemetryHistory[balanceTelemetryHistory.length - 1];
+                return (
+                  <>
+                    <div className="flex justify-between text-amber-200 font-bold">
+                      <span>Latest ({latest.levelId} · {latest.activeWispCount} wisps):</span>
+                      <span>{latest.finalResultBand}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span>Atk1 / Atk2 Targets:</span>
+                      <span className="truncate max-w-[170px]">
+                        {latest.attack1TargetId || 'none'} / {latest.attack2TargetId || 'none'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span>Survived / Reinf / Bullseye:</span>
+                      <span>
+                        {latest.finalWispsStable}/{latest.activeWispCount} · Reinf:{latest.reinforcementPiecesPlaced} · Bull:{latest.bullseyeUsed ? 'Y' : 'N'}
+                      </span>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          ) : (
+            <div className="bg-slate-900/60 rounded p-1 text-[9px] text-slate-500">
+              No completed siege runs recorded yet in this session.
+            </div>
+          )}
+        </div>
+
         {/* 3B. Construction Inventory-Lift, Beam-Endpoint Snap & Rotation Telemetry (All 38 fields) */}
         {constructionDiagnostics && (
           <div className="border-t border-amber-500/30 pt-1.5">
@@ -947,6 +1070,36 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
                       {constructionDiagnostics.timberJointDiagnostics.playerFriendlyJointMessage || 'none'}
                     </span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">21. Edit Preview / Taxonomy:</span>
+                    <span className="text-cyan-300 font-mono">
+                      {constructionDiagnostics.timberJointDiagnostics.jointEditPreviewActive ? 'PREVIEW' : 'IDLE'} ·{' '}
+                      {constructionDiagnostics.timberJointDiagnostics.connectionTaxonomy || 'FREE_CONTACT'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">22. Susp / Pres / Rem / New:</span>
+                    <span className="text-amber-200 font-mono">
+                      S:{constructionDiagnostics.timberJointDiagnostics.suspendedJointIds?.length ?? 0} ·{' '}
+                      P:{constructionDiagnostics.timberJointDiagnostics.preservedJointIds?.length ?? 0} ·{' '}
+                      R:{constructionDiagnostics.timberJointDiagnostics.removedJointIds?.length ?? 0} ·{' '}
+                      N:{constructionDiagnostics.timberJointDiagnostics.createdJointIds?.length ?? 0}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">23. Faces (Src → Tgt):</span>
+                    <span className="text-purple-300 font-mono truncate max-w-[175px]">
+                      {constructionDiagnostics.timberJointDiagnostics.activeSourceFaceId || 'none'} →{' '}
+                      {constructionDiagnostics.timberJointDiagnostics.activeTargetFaceId || 'none'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">24. Roof Peak / Brace:</span>
+                    <span className="text-emerald-300 font-mono">
+                      Peak:{constructionDiagnostics.timberJointDiagnostics.roofPeakDetected ? 'YES' : 'NO'} (Sup:{constructionDiagnostics.timberJointDiagnostics.roofPeakLowerSupportsDetected ? 'Y' : 'N'}) ·{' '}
+                      Brace:{constructionDiagnostics.timberJointDiagnostics.diagonalBraceDetected ? 'YES' : 'NO'}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -1260,7 +1413,7 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
                 className="col-span-2 flex items-center justify-center gap-1 p-1 rounded bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-800 text-[9px] font-bold cursor-pointer"
               >
                 <Trash2 className="w-3 h-3 text-rose-400" />
-                <span>9. Reset All Level 1 Prototype Data</span>
+                <span>9. Clear All Prototype Data (Dev)</span>
               </button>
             </div>
           )}

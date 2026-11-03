@@ -39,8 +39,8 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
           <div className="text-xs space-y-1">
             <div className="font-semibold text-slate-200">The Objective</div>
             <p className="text-slate-400 text-[11px] leading-relaxed">
-              Construct physical ramparts over the five protected elemental wisps
-              (Ignis, Zephyr, Terran, Marinus, Aetheris) using wood beams, wood blocks, and heavy stone.
+              Construct physical ramparts over the three protected elemental wisps
+              (Ignis, Zephyr, Marinus) using wood beams, wood blocks, and heavy stone.
             </p>
           </div>
         </div>

@@ -287,6 +287,7 @@ function runScenarioSuite() {
     console.log('Scenario J: Phase 2 Regression & Lossless Restore');
     const store = new LevelStore();
     store.resetToDefault();
+    store.lockWispsForSiege();
     const beforeState = JSON.stringify(store.getState());
 
     const siege = new SiegeController(store);

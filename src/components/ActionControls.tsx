@@ -117,10 +117,10 @@ export const ActionControls: React.FC<ActionControlsProps> = ({
         <button
           onClick={onResetLevel}
           className="flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-medium active:scale-95 transition-all cursor-pointer ml-auto"
-          title="Start Over: Reset to clean Level 1 template"
+          title="Reset Level: Reset to clean Level 1 template"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Start Over</span>
+          <span className="hidden sm:inline">Reset Level</span>
         </button>
       </div>
     );
@@ -262,18 +262,41 @@ export const ActionControls: React.FC<ActionControlsProps> = ({
     );
   }
 
-  // Active Siege Simulation States (Enemy Intro, Aiming, Flight, Impact, Settling) & Results:
-  // Retry Design MUST NOT be shown or enabled during active flight/impact;
-  // SiegeHUD provides the compact top-right Stop button during active siege simulation.
+  if (
+    mode === 'RESULTS' ||
+    mode === 'SEQUENCE_COMPLETE' ||
+    mode === 'UNLOCK_PRESENTATION'
+  ) {
+    return (
+      <div className="flex items-center justify-between gap-2">
+        <button
+          onClick={onRestoreDesign}
+          className="flex-1 flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-extrabold text-xs shadow-lg active:scale-95 transition-all cursor-pointer"
+          title="Retry Design: Restore your submitted fortress design and inventory"
+        >
+          <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Retry Design</span>
+        </button>
+
+        <button
+          onClick={onResetLevel}
+          className="flex-1 flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 font-bold text-xs active:scale-95 transition-all cursor-pointer"
+          title="Reset Level: Clean Level 1 template with full starting inventory"
+        >
+          <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+          <span>Reset Level</span>
+        </button>
+      </div>
+    );
+  }
+
+  // Active Siege Simulation States (Enemy Intro, Aiming, Flight, Impact, Settling):
   const isActiveSiegeSimulation =
     mode === 'ENEMY_INTRODUCTION' ||
     mode === 'AIMING_PREVIEW' ||
     mode === 'PROJECTILE_IN_FLIGHT' ||
     mode === 'IMPACT_RESOLUTION' ||
     mode === 'SETTLING' ||
-    mode === 'SEQUENCE_COMPLETE' ||
-    mode === 'RESULTS' ||
-    mode === 'UNLOCK_PRESENTATION' ||
     mode === 'PLACE_WISPS' ||
     mode === 'PRE_SIEGE_REVIEW';
 

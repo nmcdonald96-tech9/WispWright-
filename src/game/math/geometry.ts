@@ -3,14 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MATERIAL_CONFIGS } from '../config';
+import { CONSTRUCTION_UNIT, MATERIAL_CONFIGS, PIECE_DEFINITIONS } from '../config';
 import {
   EnvironmentalAnchor,
+  LocalCornerDef,
+  LocalFaceDef,
   MaterialType,
+  PieceCornerId,
+  PieceFaceId,
   PlacedPiece,
   SocketKind,
   SnapSocket,
   Vector2,
+  WorldCorner,
+  WorldFace,
 } from '../types';
 
 export const Vec2 = {
@@ -53,7 +59,7 @@ export function createOBB(position: Vector2, width: number, height: number, rota
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
 
-  const u = { x: cos, y: sin }; // Local X axis
+  const u = { x: cos, y: sin }; // Local X axis (longitudinal axis for beams)
   const v = { x: -sin, y: cos }; // Local Y axis
 
   // 4 corners: TL, TR, BR, BL
@@ -85,11 +91,18 @@ export function createOBB(position: Vector2, width: number, height: number, rota
 }
 
 /**
- * Creates an OBB directly from a PlacedPiece instance
+ * Creates an OBB directly from a PlacedPiece instance using authoritative PIECE_DEFINITIONS
  */
 export function getOBBFromPiece(piece: PlacedPiece): OBB {
-  const config = MATERIAL_CONFIGS[piece.type];
-  return createOBB(piece.position, config.width, config.height, piece.rotation);
+  const config = PIECE_DEFINITIONS[piece.type] ?? MATERIAL_CONFIGS[piece.type];
+  return createOBB(piece.position, config.colliderWidth, config.colliderHeight, piece.rotation);
+}
+
+/**
+ * Returns the world-space longitudinal unit axis vector for a piece at a given rotation.
+ */
+export function getPieceLongitudinalAxis(rotation: number): Vector2 {
+  return { x: Math.cos(rotation), y: Math.sin(rotation) };
 }
 
 /**
@@ -191,7 +204,7 @@ export function checkOBBOverlap(a: OBB, b: OBB, slop = 1.0): boolean {
   return getOBBPenetrationDepth(a, b, slop) > 0;
 }
 
-interface LocalSocketDef {
+export interface LocalSocketDef {
   localName: string;
   localPos: Vector2;
   localNormal: Vector2;
@@ -202,14 +215,16 @@ interface LocalSocketDef {
 
 /**
  * Returns the canonical local-space snap socket definitions for a material type.
- * Defined strictly in local coordinates relative to piece center (0, 0).
+ * Derived strictly from PIECE_DEFINITIONS in local coordinates relative to piece center (0, 0).
  */
 export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] {
-  const config = MATERIAL_CONFIGS[type];
+  const config = PIECE_DEFINITIONS[type] ?? MATERIAL_CONFIGS[type];
   const hw = config.width / 2;
   const hh = config.height / 2;
+  const halfBlock = CONSTRUCTION_UNIT / 2; // 24 px
 
   if (type === 'wood_beam') {
+    const invSqrt2 = Math.SQRT1_2;
     return [
       // 1. Primary Endpoints (END_A_CENTER and END_B_CENTER)
       {
@@ -245,10 +260,10 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
         socketKind: 'beam_side',
         localAngleOffset: 0,
       },
-      // 3. Span Side Sockets (for resting across columns or supporting posts at +/-36px)
+      // 3. Flush L-Corner Side Sockets (offset by hh = 12px from each end so a perpendicular 24px-thick beam sits flush with the outer end face)
       {
         localName: 'SIDE_TOP_A',
-        localPos: { x: -hw + 24, y: -hh },
+        localPos: { x: -hw + hh, y: -hh },
         localNormal: { x: 0, y: -1 },
         type: 'edge',
         socketKind: 'beam_side',
@@ -256,7 +271,7 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
       },
       {
         localName: 'SIDE_TOP_B',
-        localPos: { x: hw - 24, y: -hh },
+        localPos: { x: hw - hh, y: -hh },
         localNormal: { x: 0, y: -1 },
         type: 'edge',
         socketKind: 'beam_side',
@@ -264,7 +279,7 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
       },
       {
         localName: 'SIDE_BOTTOM_A',
-        localPos: { x: -hw + 24, y: hh },
+        localPos: { x: -hw + hh, y: hh },
         localNormal: { x: 0, y: 1 },
         type: 'edge',
         socketKind: 'beam_side',
@@ -272,13 +287,79 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
       },
       {
         localName: 'SIDE_BOTTOM_B',
-        localPos: { x: hw - 24, y: hh },
+        localPos: { x: hw - hh, y: hh },
         localNormal: { x: 0, y: 1 },
         type: 'edge',
         socketKind: 'beam_side',
         localAngleOffset: 0,
       },
-      // 4. Endpoint Corner Sockets (END_A/B TOP/BOTTOM CORNERS)
+      // 4. Modular Block-Column Bearing Side Sockets (offset by halfBlock = 24px from each end so a 48px block column aligns flush with the beam end)
+      {
+        localName: 'SIDE_TOP_SPAN_A',
+        localPos: { x: -hw + halfBlock, y: -hh },
+        localNormal: { x: 0, y: -1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_TOP_SPAN_B',
+        localPos: { x: hw - halfBlock, y: -hh },
+        localNormal: { x: 0, y: -1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_BOTTOM_SPAN_A',
+        localPos: { x: -hw + halfBlock, y: hh },
+        localNormal: { x: 0, y: 1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'SIDE_BOTTOM_SPAN_B',
+        localPos: { x: hw - halfBlock, y: hh },
+        localNormal: { x: 0, y: 1 },
+        type: 'edge',
+        socketKind: 'beam_side',
+        localAngleOffset: 0,
+      },
+      // 5. Endpoint Outer & Inner Corner Sockets (END_A/B OUTER/INNER CORNERS)
+      {
+        localName: 'END_A_OUTER_CORNER',
+        localPos: { x: -hw, y: -hh },
+        localNormal: { x: -invSqrt2, y: -invSqrt2 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_A_INNER_CORNER',
+        localPos: { x: -hw, y: hh },
+        localNormal: { x: -invSqrt2, y: invSqrt2 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_B_OUTER_CORNER',
+        localPos: { x: hw, y: -hh },
+        localNormal: { x: invSqrt2, y: -invSqrt2 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      {
+        localName: 'END_B_INNER_CORNER',
+        localPos: { x: hw, y: hh },
+        localNormal: { x: invSqrt2, y: invSqrt2 },
+        type: 'edge',
+        socketKind: 'beam_corner',
+        localAngleOffset: 0,
+      },
+      // Compatibility aliases for existing tests
       {
         localName: 'END_A_TOP_CORNER',
         localPos: { x: -hw, y: -hh },
@@ -311,7 +392,7 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
         socketKind: 'beam_corner',
         localAngleOffset: 0,
       },
-      // 5. Center Socket
+      // 6. Center Socket
       {
         localName: 'CENTER',
         localPos: { x: 0, y: 0 },
@@ -323,7 +404,9 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
     ];
   }
 
-  // Blocks (48x48): 4 face edges + center
+  // Standard Blocks (1.0 × 1.0 units = 48 × 48 px):
+  // 4 face centers + 4 first-class corners + center
+  const invSqrt2 = Math.SQRT1_2;
   return [
     {
       localName: 'TOP_EDGE',
@@ -355,6 +438,39 @@ export function getLocalSocketDefinitions(type: MaterialType): LocalSocketDef[] 
       localNormal: { x: -1, y: 0 },
       type: 'edge',
       socketKind: 'block_edge',
+      localAngleOffset: 0,
+    },
+    // First-class Block Corner Sockets (TOP_LEFT_CORNER, TOP_RIGHT_CORNER, BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER)
+    {
+      localName: 'TOP_LEFT_CORNER',
+      localPos: { x: -hw, y: -hh },
+      localNormal: { x: -invSqrt2, y: -invSqrt2 },
+      type: 'edge',
+      socketKind: 'block_corner',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'TOP_RIGHT_CORNER',
+      localPos: { x: hw, y: -hh },
+      localNormal: { x: invSqrt2, y: -invSqrt2 },
+      type: 'edge',
+      socketKind: 'block_corner',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'BOTTOM_LEFT_CORNER',
+      localPos: { x: -hw, y: hh },
+      localNormal: { x: -invSqrt2, y: invSqrt2 },
+      type: 'edge',
+      socketKind: 'block_corner',
+      localAngleOffset: 0,
+    },
+    {
+      localName: 'BOTTOM_RIGHT_CORNER',
+      localPos: { x: hw, y: hh },
+      localNormal: { x: invSqrt2, y: invSqrt2 },
+      type: 'edge',
+      socketKind: 'block_corner',
       localAngleOffset: 0,
     },
     {
@@ -393,10 +509,38 @@ export function getPieceSnapSocketsForTransform(
 }
 
 /**
- * Computes all available snap sockets for a placed piece in world space.
+ * Normalizes an angle in radians to the signed interval (-PI, PI].
  */
-export function getPieceSnapSockets(piece: PlacedPiece): SnapSocket[] {
-  return getPieceSnapSocketsForTransform(piece.type, piece.position, piece.rotation, piece.id);
+export function normalizeAngleSigned(angleRad: number): number {
+  let a = angleRad % (2 * Math.PI);
+  if (a <= -Math.PI) a += 2 * Math.PI;
+  if (a > Math.PI) a -= 2 * Math.PI;
+  return a;
+}
+
+/**
+ * Computes all available snap sockets for a placed piece or (type, position, rotation) in world space.
+ */
+export function getPieceSnapSockets(
+  pieceOrType: PlacedPiece | MaterialType,
+  position?: Vector2,
+  rotation?: number,
+  pieceId = 'candidate',
+): SnapSocket[] {
+  if (typeof pieceOrType === 'string') {
+    return getPieceSnapSocketsForTransform(
+      pieceOrType,
+      position ?? { x: 0, y: 0 },
+      rotation ?? 0,
+      pieceId,
+    );
+  }
+  return getPieceSnapSocketsForTransform(
+    pieceOrType.type,
+    pieceOrType.position,
+    pieceOrType.rotation,
+    pieceOrType.id,
+  );
 }
 
 /**
@@ -414,3 +558,471 @@ export function getAnchorSnapSockets(anchors: EnvironmentalAnchor[]): SnapSocket
     angle: 0,
   }));
 }
+
+/**
+ * Returns the canonical local-space corner definitions for a piece type.
+ * Exposes TOP_LEFT_CORNER, TOP_RIGHT_CORNER, BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER for blocks,
+ * and END_A_OUTER_CORNER, END_A_INNER_CORNER, END_B_OUTER_CORNER, END_B_INNER_CORNER for wood_beam.
+ */
+export function getLocalCornerDefinitions(type: MaterialType): LocalCornerDef[] {
+  const config = PIECE_DEFINITIONS[type] ?? MATERIAL_CONFIGS[type];
+  const hw = config.width / 2;
+  const hh = config.height / 2;
+  const invSqrt2 = Math.SQRT1_2;
+
+  if (type === 'wood_beam') {
+    return [
+      {
+        id: 'END_A_OUTER_CORNER',
+        localPos: { x: -hw, y: -hh },
+        localNormal: { x: -invSqrt2, y: -invSqrt2 },
+        adjacentFaces: ['END_A_FACE', 'TOP_FACE'],
+        jointCapable: true,
+      },
+      {
+        id: 'END_A_INNER_CORNER',
+        localPos: { x: -hw, y: hh },
+        localNormal: { x: -invSqrt2, y: invSqrt2 },
+        adjacentFaces: ['END_A_FACE', 'BOTTOM_FACE'],
+        jointCapable: true,
+      },
+      {
+        id: 'END_B_OUTER_CORNER',
+        localPos: { x: hw, y: -hh },
+        localNormal: { x: invSqrt2, y: -invSqrt2 },
+        adjacentFaces: ['END_B_FACE', 'TOP_FACE'],
+        jointCapable: true,
+      },
+      {
+        id: 'END_B_INNER_CORNER',
+        localPos: { x: hw, y: hh },
+        localNormal: { x: invSqrt2, y: invSqrt2 },
+        adjacentFaces: ['END_B_FACE', 'BOTTOM_FACE'],
+        jointCapable: true,
+      },
+    ];
+  }
+
+  const jointCapable = config.jointCapable;
+  return [
+    {
+      id: 'TOP_LEFT_CORNER',
+      localPos: { x: -hw, y: -hh },
+      localNormal: { x: -invSqrt2, y: -invSqrt2 },
+      adjacentFaces: ['TOP_FACE', 'LEFT_FACE'],
+      jointCapable,
+    },
+    {
+      id: 'TOP_RIGHT_CORNER',
+      localPos: { x: hw, y: -hh },
+      localNormal: { x: invSqrt2, y: -invSqrt2 },
+      adjacentFaces: ['TOP_FACE', 'RIGHT_FACE'],
+      jointCapable,
+    },
+    {
+      id: 'BOTTOM_LEFT_CORNER',
+      localPos: { x: -hw, y: hh },
+      localNormal: { x: -invSqrt2, y: invSqrt2 },
+      adjacentFaces: ['BOTTOM_FACE', 'LEFT_FACE'],
+      jointCapable,
+    },
+    {
+      id: 'BOTTOM_RIGHT_CORNER',
+      localPos: { x: hw, y: hh },
+      localNormal: { x: invSqrt2, y: invSqrt2 },
+      adjacentFaces: ['BOTTOM_FACE', 'RIGHT_FACE'],
+      jointCapable,
+    },
+  ];
+}
+
+export const getLocalPieceCorners = getLocalCornerDefinitions;
+
+/**
+ * Transforms local-space corner definitions into world coordinates.
+ */
+export function getPieceCornersForTransform(
+  type: MaterialType,
+  position: Vector2,
+  rotation: number,
+  pieceId = 'candidate',
+): WorldCorner[] {
+  const defs = getLocalCornerDefinitions(type);
+  return defs.map((d) => ({
+    ...d,
+    pieceId,
+    pieceType: type,
+    worldPos: Vec2.add(position, Vec2.rotate(d.localPos, rotation)),
+    worldNormal: Vec2.rotate(d.localNormal, rotation),
+  }));
+}
+
+/**
+ * Returns world-space corners for a PlacedPiece.
+ */
+export function getPieceCorners(
+  pieceOrType: PlacedPiece | MaterialType,
+  position?: Vector2,
+  rotation?: number,
+  pieceId = 'candidate',
+): WorldCorner[] {
+  if (typeof pieceOrType === 'string') {
+    return getPieceCornersForTransform(
+      pieceOrType,
+      position ?? { x: 0, y: 0 },
+      rotation ?? 0,
+      pieceId,
+    );
+  }
+  return getPieceCornersForTransform(
+    pieceOrType.type,
+    pieceOrType.position,
+    pieceOrType.rotation,
+    pieceOrType.id,
+  );
+}
+
+/**
+ * Returns the canonical local-space face definitions for a piece type.
+ * Exposes END_A_FACE, END_B_FACE, TOP_FACE, BOTTOM_FACE, SIDE_A_FACE, SIDE_B_FACE, SIDE_FACE_A, SIDE_FACE_B for wood_beam,
+ * and TOP_FACE, BOTTOM_FACE, LEFT_FACE, RIGHT_FACE for blocks.
+ */
+export function getLocalFaceDefinitions(type: MaterialType): LocalFaceDef[] {
+  const config = PIECE_DEFINITIONS[type] ?? MATERIAL_CONFIGS[type];
+  const hw = config.width / 2;
+  const hh = config.height / 2;
+
+  if (type === 'wood_beam') {
+    return [
+      {
+        id: 'END_A_FACE',
+        center: { x: -hw, y: 0 },
+        start: { x: -hw, y: -hh },
+        end: { x: -hw, y: hh },
+        normal: { x: -1, y: 0 },
+        tangent: { x: 0, y: 1 },
+        length: config.height,
+        jointCapable: true,
+      },
+      {
+        id: 'END_B_FACE',
+        center: { x: hw, y: 0 },
+        start: { x: hw, y: -hh },
+        end: { x: hw, y: hh },
+        normal: { x: 1, y: 0 },
+        tangent: { x: 0, y: 1 },
+        length: config.height,
+        jointCapable: true,
+      },
+      {
+        id: 'TOP_FACE',
+        center: { x: 0, y: -hh },
+        start: { x: -hw, y: -hh },
+        end: { x: hw, y: -hh },
+        normal: { x: 0, y: -1 },
+        tangent: { x: 1, y: 0 },
+        length: config.width,
+        jointCapable: true,
+      },
+      {
+        id: 'BOTTOM_FACE',
+        center: { x: 0, y: hh },
+        start: { x: -hw, y: hh },
+        end: { x: hw, y: hh },
+        normal: { x: 0, y: 1 },
+        tangent: { x: 1, y: 0 },
+        length: config.width,
+        jointCapable: true,
+      },
+      {
+        id: 'SIDE_A_FACE',
+        center: { x: 0, y: -hh },
+        start: { x: -hw, y: -hh },
+        end: { x: hw, y: -hh },
+        normal: { x: 0, y: -1 },
+        tangent: { x: 1, y: 0 },
+        length: config.width,
+        jointCapable: true,
+      },
+      {
+        id: 'SIDE_B_FACE',
+        center: { x: 0, y: hh },
+        start: { x: -hw, y: hh },
+        end: { x: hw, y: hh },
+        normal: { x: 0, y: 1 },
+        tangent: { x: 1, y: 0 },
+        length: config.width,
+        jointCapable: true,
+      },
+      {
+        id: 'SIDE_FACE_A',
+        center: { x: 0, y: -hh },
+        start: { x: -hw, y: -hh },
+        end: { x: hw, y: -hh },
+        normal: { x: 0, y: -1 },
+        tangent: { x: 1, y: 0 },
+        length: config.width,
+        jointCapable: true,
+      },
+      {
+        id: 'SIDE_FACE_B',
+        center: { x: 0, y: hh },
+        start: { x: -hw, y: hh },
+        end: { x: hw, y: hh },
+        normal: { x: 0, y: 1 },
+        tangent: { x: 1, y: 0 },
+        length: config.width,
+        jointCapable: true,
+      },
+    ];
+  }
+
+  const jointCapable = config.jointCapable;
+  return [
+    {
+      id: 'TOP_FACE',
+      center: { x: 0, y: -hh },
+      start: { x: -hw, y: -hh },
+      end: { x: hw, y: -hh },
+      normal: { x: 0, y: -1 },
+      tangent: { x: 1, y: 0 },
+      length: config.width,
+      jointCapable,
+    },
+    {
+      id: 'BOTTOM_FACE',
+      center: { x: 0, y: hh },
+      start: { x: -hw, y: hh },
+      end: { x: hw, y: hh },
+      normal: { x: 0, y: 1 },
+      tangent: { x: 1, y: 0 },
+      length: config.width,
+      jointCapable,
+    },
+    {
+      id: 'LEFT_FACE',
+      center: { x: -hw, y: 0 },
+      start: { x: -hw, y: -hh },
+      end: { x: -hw, y: hh },
+      normal: { x: -1, y: 0 },
+      tangent: { x: 0, y: 1 },
+      length: config.height,
+      jointCapable,
+    },
+    {
+      id: 'RIGHT_FACE',
+      center: { x: hw, y: 0 },
+      start: { x: hw, y: -hh },
+      end: { x: hw, y: hh },
+      normal: { x: 1, y: 0 },
+      tangent: { x: 0, y: 1 },
+      length: config.height,
+      jointCapable,
+    },
+  ];
+}
+
+export const getLocalPieceFaces = getLocalFaceDefinitions;
+
+/**
+ * Transforms local-space face definitions into world coordinates.
+ */
+export function getPieceFacesForTransform(
+  type: MaterialType,
+  position: Vector2,
+  rotation: number,
+  pieceId = 'candidate',
+): WorldFace[] {
+  const defs = getLocalFaceDefinitions(type);
+  return defs.map((d) => ({
+    ...d,
+    faceId: d.id,
+    pieceId,
+    pieceType: type,
+    worldCenter: Vec2.add(position, Vec2.rotate(d.center, rotation)),
+    worldStart: Vec2.add(position, Vec2.rotate(d.start, rotation)),
+    worldEnd: Vec2.add(position, Vec2.rotate(d.end, rotation)),
+    worldNormal: Vec2.rotate(d.normal, rotation),
+    worldTangent: Vec2.rotate(d.tangent, rotation),
+  }));
+}
+
+/**
+ * Returns world-space faces for a PlacedPiece.
+ */
+export function getPieceFaces(
+  pieceOrType: PlacedPiece | MaterialType,
+  position?: Vector2,
+  rotation?: number,
+  pieceId = 'candidate',
+): WorldFace[] {
+  if (typeof pieceOrType === 'string') {
+    return getPieceFacesForTransform(
+      pieceOrType,
+      position ?? { x: 0, y: 0 },
+      rotation ?? 0,
+      pieceId,
+    );
+  }
+  return getPieceFacesForTransform(
+    pieceOrType.type,
+    pieceOrType.position,
+    pieceOrType.rotation,
+    pieceOrType.id,
+  );
+}
+
+/**
+ * Returns a complete world-space feature dictionary for a piece (for tests and diagnostics).
+ * Exposes all required Block features (TOP_FACE, BOTTOM_FACE, LEFT_FACE, RIGHT_FACE,
+ * TOP_LEFT_CORNER, TOP_RIGHT_CORNER, BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER,
+ * FACE_CENTER_TOP, FACE_CENTER_BOTTOM, FACE_CENTER_LEFT, FACE_CENTER_RIGHT, CENTER)
+ * and all required Timber Beam features (END_A_FACE, END_B_FACE, END_A_CENTER, END_B_CENTER,
+ * END_A_INNER_CORNER, END_A_OUTER_CORNER, END_B_INNER_CORNER, END_B_OUTER_CORNER,
+ * TOP_FACE, BOTTOM_FACE, SIDE_FACE_A, SIDE_FACE_B, CENTER, longitudinalAxis).
+ */
+export function getPieceWorldFeatures(
+  type: MaterialType,
+  position: Vector2,
+  rotation: number,
+  pieceId = 'candidate',
+): {
+  faces: Record<string, WorldFace>;
+  corners: Record<string, WorldCorner>;
+  points: Record<string, Vector2>;
+  normals: Record<string, Vector2>;
+  longitudinalAxis: Vector2;
+} {
+  const worldFaces = getPieceFacesForTransform(type, position, rotation, pieceId);
+  const worldCorners = getPieceCornersForTransform(type, position, rotation, pieceId);
+  const worldSockets = getPieceSnapSocketsForTransform(type, position, rotation, pieceId);
+
+  const faces: Record<string, WorldFace> = {};
+  const corners: Record<string, WorldCorner> = {};
+  const points: Record<string, Vector2> = { CENTER: { ...position } };
+  const normals: Record<string, Vector2> = {};
+
+  for (const f of worldFaces) {
+    faces[f.id] = f;
+    points[f.id] = { ...f.worldCenter };
+    normals[f.id] = { ...f.worldNormal };
+  }
+  for (const c of worldCorners) {
+    corners[c.id] = c;
+    points[c.id] = { ...c.worldPos };
+    normals[c.id] = { ...c.worldNormal };
+  }
+  for (const s of worldSockets) {
+    if (s.localName) {
+      points[s.localName] = { ...s.worldPos };
+      normals[s.localName] = { ...s.normal };
+    }
+  }
+
+  if (type !== 'wood_beam') {
+    if (faces.TOP_FACE) {
+      points.FACE_CENTER_TOP = { ...faces.TOP_FACE.worldCenter };
+      normals.FACE_CENTER_TOP = { ...faces.TOP_FACE.worldNormal };
+    }
+    if (faces.BOTTOM_FACE) {
+      points.FACE_CENTER_BOTTOM = { ...faces.BOTTOM_FACE.worldCenter };
+      normals.FACE_CENTER_BOTTOM = { ...faces.BOTTOM_FACE.worldNormal };
+    }
+    if (faces.LEFT_FACE) {
+      points.FACE_CENTER_LEFT = { ...faces.LEFT_FACE.worldCenter };
+      normals.FACE_CENTER_LEFT = { ...faces.LEFT_FACE.worldNormal };
+    }
+    if (faces.RIGHT_FACE) {
+      points.FACE_CENTER_RIGHT = { ...faces.RIGHT_FACE.worldCenter };
+      normals.FACE_CENTER_RIGHT = { ...faces.RIGHT_FACE.worldNormal };
+    }
+  }
+
+  return {
+    faces,
+    corners,
+    points,
+    normals,
+    longitudinalAxis: getPieceLongitudinalAxis(rotation),
+  };
+}
+
+/**
+ * Projects a 2D point onto a finite world-space face segment.
+ */
+export function getClosestPointOnFace(
+  point: Vector2,
+  face: WorldFace,
+): { point: Vector2; distance: number; t: number } {
+  const seg = Vec2.sub(face.worldEnd, face.worldStart);
+  const segLenSq = seg.x * seg.x + seg.y * seg.y;
+  if (segLenSq < 1e-6) {
+    return {
+      point: { ...face.worldCenter },
+      distance: Vec2.distance(point, face.worldCenter),
+      t: 0.5,
+    };
+  }
+  const rel = Vec2.sub(point, face.worldStart);
+  const rawT = (rel.x * seg.x + rel.y * seg.y) / segLenSq;
+  const t = Math.max(0, Math.min(1, rawT));
+  const closest = {
+    x: face.worldStart.x + seg.x * t,
+    y: face.worldStart.y + seg.y * t,
+  };
+  return {
+    point: closest,
+    distance: Vec2.distance(point, closest),
+    t,
+  };
+}
+
+/**
+ * Maps a local socket name to its corresponding canonical PieceFaceId.
+ */
+export function mapSocketToFaceId(
+  localSocketName: string | undefined,
+  pieceType: MaterialType,
+): PieceFaceId | null {
+  if (!localSocketName) return null;
+  if (pieceType === 'wood_beam') {
+    if (localSocketName.startsWith('END_A')) return 'END_A_FACE';
+    if (localSocketName.startsWith('END_B')) return 'END_B_FACE';
+    if (localSocketName.startsWith('SIDE_TOP')) return 'TOP_FACE';
+    if (localSocketName.startsWith('SIDE_BOTTOM')) return 'BOTTOM_FACE';
+  } else {
+    if (localSocketName === 'TOP_EDGE' || localSocketName.startsWith('TOP_')) return 'TOP_FACE';
+    if (localSocketName === 'BOTTOM_EDGE' || localSocketName.startsWith('BOTTOM_')) return 'BOTTOM_FACE';
+    if (localSocketName === 'LEFT_EDGE') return 'LEFT_FACE';
+    if (localSocketName === 'RIGHT_EDGE') return 'RIGHT_FACE';
+  }
+  return null;
+}
+
+/**
+ * Maps a local socket name to its corresponding canonical PieceCornerId when applicable.
+ */
+export function mapSocketToCornerId(
+  localSocketName: string | undefined,
+): PieceCornerId | null {
+  if (!localSocketName) return null;
+  const cornerIds: PieceCornerId[] = [
+    'TOP_LEFT_CORNER',
+    'TOP_RIGHT_CORNER',
+    'BOTTOM_LEFT_CORNER',
+    'BOTTOM_RIGHT_CORNER',
+    'END_A_INNER_CORNER',
+    'END_A_OUTER_CORNER',
+    'END_B_INNER_CORNER',
+    'END_B_OUTER_CORNER',
+    'END_A_TOP_CORNER',
+    'END_A_BOTTOM_CORNER',
+    'END_B_TOP_CORNER',
+    'END_B_BOTTOM_CORNER',
+  ];
+  return cornerIds.includes(localSocketName as PieceCornerId)
+    ? (localSocketName as PieceCornerId)
+    : null;
+}
+
+

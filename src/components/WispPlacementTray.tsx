@@ -71,10 +71,10 @@ export const WispPlacementTray: React.FC<WispPlacementTrayProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
           <div className="flex items-center gap-2">
             <span className="px-2 py-0.5 rounded bg-teal-500/20 border border-teal-400/40 text-teal-300 text-[10px] font-bold uppercase tracking-wider">
-              Phase 4 · Place Wisps ({placedCount}/5 Placed)
+              Phase 4 · Place Wisps: {placedCount}/{wisps.length}
             </span>
             <span className="text-xs text-slate-300 hidden sm:inline">
-              Drag each wisp into valid sanctuary space or tap a wisp then tap the sanctuary.
+              Place all {wisps.length === 3 ? 'three' : wisps.length} wisps before the siege. Drag or tap to place.
             </span>
           </div>
 
@@ -112,8 +112,20 @@ export const WispPlacementTray: React.FC<WispPlacementTrayProps> = ({
           </div>
         </div>
 
-        {/* Five Wisp Staging Cards */}
-        <div className="grid grid-cols-5 gap-2">
+        {/* Active Wisp Staging Cards */}
+        <div
+          className={`grid gap-2 ${
+            wisps.length === 1
+              ? 'grid-cols-1 max-w-xs mx-auto'
+              : wisps.length === 2
+                ? 'grid-cols-2 max-w-md mx-auto'
+                : wisps.length === 3
+                  ? 'grid-cols-3'
+                  : wisps.length === 4
+                    ? 'grid-cols-4'
+                    : 'grid-cols-5'
+          }`}
+        >
           {wisps.map((wisp) => {
             const isPlaced = wisp.placed === true && wisp.isValid !== false;
             const isSelected = selectedWispId === wisp.id;

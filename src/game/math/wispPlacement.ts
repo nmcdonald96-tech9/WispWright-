@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { INITIAL_LEVEL_STATE, MATERIAL_CONFIGS, WORLD_CONFIG } from '../config';
+import { INITIAL_LEVEL_STATE, MATERIAL_CONFIGS, WISP_ROSTER_DEFINITIONS, WORLD_CONFIG } from '../config';
 import {
   EnvironmentalAnchor,
   PlacedPiece,
@@ -64,9 +64,13 @@ export interface WispProtectionEvaluation {
 }
 
 /**
- * Returns the canonical default sanctuary position for a wisp ID.
+ * Returns the canonical default sanctuary position for a wisp ID across the full 5-wisp roster.
  */
 export function getDefaultWispPosition(wispId: string): Vector2 {
+  const rosterDef = WISP_ROSTER_DEFINITIONS.find((w) => w.id === wispId);
+  if (rosterDef) {
+    return { ...rosterDef.defaultPosition };
+  }
   const found = INITIAL_LEVEL_STATE.wisps.find((w) => w.id === wispId);
   return found ? { ...found.position } : { x: 400, y: 720 };
 }

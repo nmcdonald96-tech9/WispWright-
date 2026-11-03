@@ -1,0 +1,1075 @@
+MODULAR CONSTRUCTION GEOMETRY, CORNER JOINTS, AND SYMMETRIC ROOF REFINEMENT
+
+The current builder supports:
+
+- Inventory-to-world dragging
+- Free placement
+- Position snapping
+- Manual rotation
+- Rotation collision validation
+- Automatic joint-edit transactions
+- Timber endpoint splices
+- Timber face joints
+- Roof Peak joints
+- Diagonal braces
+- T-joints
+- Supported contact
+- Environmental anchors
+- Breakable physical joints
+- Stability testing
+- Undo and redo
+- Reinforcement editing
+- Persistence and reload recovery
+
+The latest device testing shows that these systems are functional, but the
+construction geometry remains inconsistent around corners, angled supports, and
+roof peaks.
+
+This is a focused construction-geometry refinement.
+
+Do not add new gameplay systems, levels, materials, projectiles, progression,
+monetization, or visual fortress transformation.
+
+PRODUCT GOAL
+
+The construction system should recognize ordinary architectural intent.
+
+Players should be able to create clean:
+
+- L-shaped timber corners
+- Vertical posts at horizontal beam endpoints
+- Angled rafters seated on block corners
+- Symmetric peaked roofs
+- Asymmetric but geometrically valid roofs
+- Post-and-beam frames
+- Diagonal braces
+- T-shaped timber frames
+- Enclosed wisp chambers
+
+The pieces should align cleanly without pixel-perfect placement.
+
+Connections should remain physically credible:
+
+- Connected structures should not fall apart under ordinary gravity merely
+  because of tiny geometric gaps.
+- Unsupported structures should still fall, pivot, spread, strain, or break.
+- Joints should remain breakable.
+- Snapping must not create indestructible structures.
+- Physics remains authoritative after placement.
+
+PRESERVE
+
+Preserve all accepted behavior:
+
+- Authoritative logical game state
+- Inventory-to-world dragging
+- Tap-to-place accessibility
+- Inventory accounting
+- Placement ghosts
+- Manual rotation ownership
+- Rotation transaction validation
+- Swept rotation collision checks
+- Automatic connected-piece editing
+- Cancel restoring the prior joint graph
+- Timber splices
+- Existing face joints
+- Existing Roof Peak joint type
+- Diagonal braces
+- T-joints
+- Supported contact
+- Environmental anchors
+- Undo and redo
+- Stability testing
+- Build without wisps
+- Post-construction wisp placement
+- Enclosed wisp placement
+- Wisp collision and debris-contact rules
+- Projectile targeting and ballistics
+- Reinforcement
+- Bullseye behavior
+- Tactical, Follow, and POV camera modes
+- Results
+- Retry Design
+- Start Over
+- Reset Level
+- Snapshot and attempt-ID authority
+- Local persistence
+- Reload recovery
+- Existing automated regression tests
+
+Do not change:
+
+- Material durability
+- Projectile strength
+- Wisp thresholds
+- Global gravity
+- Damage formulas
+- Level 1 balance
+- Starting inventory
+- Active wisp count
+- Attack definitions
+
+CONFIRMED GEOMETRY PROBLEMS
+
+1. NON-MODULAR PIECE PROPORTIONS
+
+Two standard blocks placed side by side currently occupy approximately
+three-quarters of one Timber Beam length.
+
+The dimensions do not appear to express a deliberate modular relationship such
+as:
+
+- Two blocks equal one beam
+- Three blocks equal one beam
+- One block equals a documented fraction of a beam
+
+This causes:
+
+- Unpredictable span lengths
+- Asymmetric structures
+- Beam endpoints that do not align with block columns
+- Roof peaks shifted away from center
+- Repeated small gaps or overhangs
+- Snap candidates that look close but fail collider validation
+
+2. BLOCK CORNERS ARE NOT FIRST-CLASS CONNECTION FEATURES
+
+An angled Timber Beam endpoint approaching the upper corner of a block does not
+reliably receive the expected corner candidate.
+
+The solver tends to prefer locations farther along broad flat faces.
+
+The player expects the rafter endpoint to seat at the block corner.
+
+3. VERTICAL-TO-HORIZONTAL CORNER CONNECTIONS ARE INCONSISTENT
+
+A vertical Timber Beam approaching the end of a horizontal Timber Beam may:
+
+- Attach outside the endpoint
+- Shift inward along the top face
+- Use an ambiguous T-joint
+- Produce an offset or overhang
+- Produce a different result depending on placement order
+
+The builder should recognize a clean L-shaped frame corner.
+
+4. ROOF PEAKS ARE ASYMMETRIC
+
+Two equal and opposite angled rafters may approach one another, but their inward
+corners do not reliably form a shared apex.
+
+Observed outcomes include:
+
+- Endpoint-center alignment rather than face/corner alignment
+- One beam offset above or beside the other
+- Visible square endpoint faces
+- Small gaps
+- Intersections
+- An asymmetric peak despite symmetric supports and angles
+
+5. LOWER RAFTER SUPPORTS ARE DIFFICULT TO EXPRESS
+
+The Roof Peak joint may form while the lower rafter endpoints remain unconnected
+or unsupported.
+
+During stability testing, the roof then spreads or collapses.
+
+The physics outcome may be correct, but the builder did not provide an
+intuitive corner-seat connection at the lower supports.
+
+PRIMARY OBJECTIVES
+
+1. Establish one authoritative modular construction measurement system.
+2. Make block, beam, socket, face, and corner geometry derive from that system.
+3. Add first-class block and beam corner connection candidates.
+4. Add deterministic L-shaped frame-corner recognition.
+5. Add flush lower-rafter corner-seat connections.
+6. Refine Roof Peak solving to use inward corner/face geometry.
+7. Make symmetric roof construction placement-order independent.
+8. Provide predictable candidate ranking when several connections are nearby.
+9. Allow optional candidate cycling when intent remains ambiguous.
+10. Preserve breakable gravity-based physics.
+11. Preserve existing structures through explicit schema migration.
+12. Avoid hiding invalid geometry through excessive joint strength.
+
+OUT OF SCOPE
+
+Do not implement:
+
+- New construction materials
+- Metal brackets
+- Rope
+- Joint repair
+- Magical visual transformation
+- Automatic fortress generation
+- Final art
+- New levels
+- New projectile classes
+- Wind machine
+- New Bullseye variants
+- Multiplayer
+- Advertising
+
+MODULAR CONSTRUCTION UNIT
+
+Define one authoritative world-space construction unit.
+
+Recommended starting model:
+
+- Standard block width: 1.0 unit
+- Standard block height: 1.0 unit
+- Wood block: 1.0 × 1.0 units
+- Stone block: 1.0 × 1.0 units
+- Bullseye Block: 1.0 × 1.0 units
+- Timber Beam length: an intentional whole-number multiple of block width
+- Timber Beam thickness: an intentional fraction of block height
+
+Evaluate these two reasonable beam-length options:
+
+OPTION A
+
+- Timber Beam length: 2.0 units
+- Timber Beam thickness: 0.25 units
+
+OPTION B
+
+- Timber Beam length: 3.0 units
+- Timber Beam thickness: 0.25 units
+
+Select the option that best preserves the current battlefield, inventory value,
+mobile manipulation, and accepted structures.
+
+Do not select a ratio based only on the current artwork.
+
+Document the selected ratio and why it is appropriate.
+
+The selected system must provide predictable relationships such as:
+
+- A known number of block widths equals one beam length.
+- Beam thickness is an exact fraction of block height.
+- Sockets use exact local-space coordinates.
+- Face and corner geometry derive from the same dimensions.
+- Collider geometry and visible geometry agree.
+
+MODULAR DOES NOT MEAN GRID-LOCKED
+
+Preserve:
+
+- Free dragging
+- Fine placement
+- Angled construction
+- Supported arbitrary positions
+- Physics-based stacking
+- Fine and coarse rotation
+
+Modular dimensions should make snapped relationships predictable.
+
+Do not force all construction onto a visible grid.
+
+PIECE DEFINITION AUTHORITY
+
+Centralize piece geometry.
+
+Each piece definition should contain:
+
+- Piece type
+- Width in construction units
+- Height in construction units
+- Collider width
+- Collider height
+- Visual width
+- Visual height
+- Local origin
+- Local faces
+- Local corners
+- Local sockets
+- Joint-capable features
+- Material
+- Mass or density reference
+- Rendering scale reference
+
+Do not define visual size, collider size, and snap geometry independently in
+multiple files.
+
+The renderer, placement validator, snap solver, and physics bridge should derive
+from the same authoritative piece definition.
+
+BLOCK GEOMETRY
+
+Every standard block should expose local-space features:
+
+- TOP_FACE
+- BOTTOM_FACE
+- LEFT_FACE
+- RIGHT_FACE
+- TOP_LEFT_CORNER
+- TOP_RIGHT_CORNER
+- BOTTOM_LEFT_CORNER
+- BOTTOM_RIGHT_CORNER
+- FACE_CENTER_TOP
+- FACE_CENTER_BOTTOM
+- FACE_CENTER_LEFT
+- FACE_CENTER_RIGHT
+- CENTER
+
+Corners must transform correctly through piece position and rotation.
+
+If blocks are not rotatable currently, retain the infrastructure without adding
+unnecessary controls.
+
+TIMBER BEAM GEOMETRY
+
+Each Timber Beam should expose:
+
+- END_A_FACE
+- END_B_FACE
+- END_A_CENTER
+- END_B_CENTER
+- END_A_INNER_CORNER
+- END_A_OUTER_CORNER
+- END_B_INNER_CORNER
+- END_B_OUTER_CORNER
+- TOP_FACE
+- BOTTOM_FACE
+- SIDE_FACE_A
+- SIDE_FACE_B
+- CENTER
+- Longitudinal axis
+- Face normals
+- Corner normals where needed
+
+These features must transform through the beam’s authoritative world position
+and rotation.
+
+Do not hardcode geometry only for zero, 45, or 90 degrees.
+
+The system must work for supported rotation increments generally.
+
+CONNECTION CATEGORIES
+
+Preserve and clarify:
+
+1. FREE CONTACT
+2. SUPPORTED CONTACT
+3. POSITIONAL SNAP
+4. TIMBER SPLICE
+5. TIMBER FACE JOINT
+6. TIMBER CORNER JOINT
+7. RAFTER CORNER SEAT
+8. ROOF PEAK JOINT
+9. DIAGONAL BRACE JOINT
+10. T-JOINT
+11. ENVIRONMENTAL ANCHOR
+
+Do not use one generic “connected” state.
+
+TIMBER CORNER JOINT
+
+Add a recognized L-corner relationship.
+
+A Timber Corner Joint is a candidate when:
+
+- One beam is approximately vertical and another approximately horizontal, or
+  two beam axes form a plausible corner angle.
+- A beam endpoint approaches the endpoint region of another beam.
+- Relevant faces or corners can meet without penetration.
+- The player-selected angles remain authoritative.
+- The resulting geometry forms a visually clean architectural corner.
+
+Default player-facing result:
+
+- A butt-style L-corner
+- The vertical beam endpoint sits flush against the horizontal beam’s compatible
+  face or endpoint region.
+- The inside corner aligns cleanly.
+- No arbitrary overhang exists unless intentionally chosen.
+
+The solver should not unpredictably alternate among:
+
+- Outside endpoint splice
+- Top-face attachment
+- T-joint
+- Supported contact
+
+when the most obvious intent is an L-corner.
+
+L-CORNER PLACEMENT-ORDER INDEPENDENCE
+
+Test both orders:
+
+- Horizontal beam committed first, vertical beam placed second
+- Vertical beam committed first, horizontal beam placed second
+
+For identical final angles and local geometry:
+
+- Candidate type should match.
+- Final seam should match.
+- Joint type should match.
+- Final world geometry should be equivalent within numerical tolerance.
+
+Do not privilege the previously committed piece’s endpoint-center model over the
+complete relationship.
+
+BLOCK-CORNER SEAT
+
+Add a first-class corner-seat candidate for a Timber Beam endpoint approaching a
+block corner.
+
+Example:
+
+- A 45-degree rafter endpoint approaches a block’s TOP_RIGHT_CORNER.
+- The endpoint should seat at that corner.
+- The beam angle should remain 45 degrees.
+- The beam body should remain outside the block.
+- No visible penetration should occur.
+- No excessive gap should remain.
+
+Support corresponding mirrored relationships:
+
+- TOP_LEFT_CORNER
+- TOP_RIGHT_CORNER
+- Appropriate lower corners when structurally meaningful
+
+A corner seat may produce:
+
+A. SUPPORTED CORNER CONTACT
+
+- Gravity/contact-based
+- No structural joint
+- Suitable when material rules do not permit attachment
+
+B. BREAKABLE CORNER JOINT
+
+- Intentional joint
+- Suitable when the beam is allowed to attach to the supporting material
+- Must be previewed clearly
+
+For Level 1 materials:
+
+- Timber to Wood Block may create a breakable corner/face joint.
+- Timber to Stone Block should default to supported corner contact unless the
+  current accepted rules already allow a defined timber-to-stone attachment.
+- Do not invent invisible adhesive to stone.
+
+The player-facing preview must distinguish:
+
+- “Corner Supported”
+- “Corner Joint”
+
+LOWER RAFTER SUPPORT
+
+When an angled beam is being used as a rafter, the lower endpoint should be able
+to connect or seat at:
+
+- Block upper corner
+- Beam upper corner
+- Compatible wall/post face
+- Environmental anchor where appropriate
+
+A valid lower support must:
+
+- Align the endpoint cleanly
+- Preserve beam angle
+- Avoid penetration
+- Create the expected contact or joint relationship
+- Be recorded as supported for roof diagnostic purposes
+
+Do not require the lower rafter endpoint to snap farther inward along the broad
+top face if the corner is the closer and more natural candidate.
+
+ROOF PEAK GEOMETRY
+
+Refine Roof Peak recognition using face and corner geometry rather than endpoint
+centers alone.
+
+A valid peak candidate exists when:
+
+- Two Timber Beams have opposed slopes.
+- Their upper inward corners or endpoint faces approach.
+- The endpoint faces can form a shared seam.
+- The beams do not materially overlap.
+- Their selected angles fall within the supported roof range.
+- The player releases within the roof-peak candidate range.
+
+Do not require exactly +45 and -45 degrees.
+
+Support a documented range such as approximately:
+
+- Left slope: +25 to +65 degrees
+- Right slope: -25 to -65 degrees
+
+or the mirrored equivalent.
+
+The exact rules should derive from beam axes and face normals.
+
+SHARED APEX SOLVER
+
+For a Roof Peak candidate:
+
+1. Identify the inward upper corner or endpoint face on each rafter.
+2. Calculate a shared apex/seam.
+3. Preserve both manually selected angles.
+4. Calculate the minimal positional adjustment required.
+5. Ensure both endpoint faces meet uniformly.
+6. Ensure neither beam penetrates the other.
+7. Ensure the remainder of each beam does not collide with other geometry.
+8. Show the complete proposed result.
+9. Create exactly one Roof Peak Joint on commit.
+
+Do not simultaneously create:
+
+- An ordinary Timber Splice
+- A Face Joint
+- A second Peak Joint
+
+at the same endpoint pair.
+
+BALANCED PEAK ADJUSTMENT
+
+When both rafters are movable player-owned pieces and the required correction is
+small, permit an optional balanced peak adjustment.
+
+Behavior:
+
+- Apply half of the positional correction to each rafter.
+- Do not change either selected angle.
+- Preview both movements clearly.
+- Do not move supporting blocks.
+- Do not move fixed or noneditable pieces.
+- Commit both rafter transforms and the peak joint as one atomic operation.
+- Cancel restores both exact prior transforms.
+- Undo restores both rafters and the previous joint graph.
+
+If one rafter is fixed or constrained:
+
+- Move only the active editable rafter.
+- Do not break unrelated constraints silently.
+
+Use a small documented adjustment limit.
+
+If correction exceeds that limit:
+
+- Do not move both pieces unexpectedly.
+- Reject the peak candidate or require explicit acceptance.
+
+PEAK SYMMETRY
+
+For equal support heights and equal opposing angles:
+
+- Lower support locations should mirror.
+- Upper rafter endpoints should share one apex.
+- The seam should be visually centered.
+- Placement order should not change the result.
+
+Add a symmetry diagnostic:
+
+- Support-height difference
+- Angle magnitude difference
+- Apex offset
+- Endpoint seam separation
+- Placement-order comparison
+
+A symmetric input should not produce an asymmetric roof because of candidate
+iteration order or stable-ID ordering.
+
+ASYMMETRIC ROOFS
+
+Do not require every roof to be symmetric.
+
+Different support heights or unequal angles may produce a valid asymmetric roof.
+
+Requirements:
+
+- Endpoint faces still meet cleanly.
+- One shared peak exists.
+- No penetration occurs.
+- The joint remains breakable.
+- The builder does not force equal angles.
+
+ROOF SUPPORT STATUS
+
+During construction preview, compute a qualitative roof-support summary:
+
+- Peak connected
+- Left lower rafter end supported
+- Right lower rafter end supported
+- Lower support unresolved
+- Support is contact only
+- Support is a structural joint
+- Support column appears unstable, if reliably known
+
+Do not predict exact survival.
+
+Player-facing examples:
+
+- “Roof Peak connected”
+- “Left rafter supported”
+- “Right rafter unsupported”
+- “Both lower ends supported”
+- “Peak connected, but one lower support is missing”
+
+This should help the player interpret the stability-test result.
+
+Do not allow the status calculation to change physics.
+
+CANDIDATE RANKING
+
+When multiple candidates are near the pointer, rank deterministically.
+
+Recommended priorities:
+
+1. Valid geometry
+2. No collider penetration
+3. Player-selected rotation preserved
+4. Explicit corner/face compatibility
+5. Architectural-intent confidence
+6. Pointer proximity
+7. Minimal total positional correction
+8. Minimal movement of already committed pieces
+9. Current candidate hysteresis
+10. Stable-ID tie-breaker
+
+Context-specific preference:
+
+- Angled endpoint near block corner:
+  prefer Corner Seat over distant face-center candidate.
+
+- Vertical endpoint near horizontal beam endpoint:
+  prefer Timber Corner Joint over ambiguous distant T-joint.
+
+- Opposed angled endpoints:
+  prefer Roof Peak over ordinary splice when peak criteria are met.
+
+- Arbitrary side contact:
+  do not infer a T-joint without a joint-capable side socket or valid face rule.
+
+CANDIDATE CYCLING
+
+When two or more materially different valid candidates remain plausible, provide
+a mobile-friendly candidate-cycle mechanism.
+
+Examples:
+
+- Corner Joint
+- Face Joint
+- Supported Contact
+- T-Joint
+
+Requirements:
+
+- Default to the highest-confidence candidate.
+- Display the current candidate label.
+- Provide a compact “Next connection” action.
+- Cycling must not commit placement.
+- Preserve manual rotation.
+- Keep the pointer/drag interaction stable.
+- Do not require candidate cycling for obvious relationships.
+- Candidate cycling order must be deterministic.
+
+Do not use a large modal dialog.
+
+SNAP HYSTERESIS
+
+Preserve candidate locking.
+
+Once a candidate is acquired:
+
+- Retain it within a slightly larger release radius.
+- Do not flicker among corner, face, and endpoint candidates.
+- Release only when the player moves clearly away or geometry becomes invalid.
+- Do not trap the piece across a large distance.
+
+MODULAR SIZE MIGRATION
+
+Changing authoritative piece dimensions may affect:
+
+- Existing construction positions
+- Joint geometry
+- Snapshots
+- Local saves
+- Retry Design
+- Prebuilt structure
+- Inventory previews
+- Physics colliders
+- Rendering
+- Targeting
+- Camera framing
+
+Implement an explicit geometry schema version.
+
+If dimensions change:
+
+1. Preserve piece IDs.
+2. Convert old logical transforms into the new unit system.
+3. Recalculate socket/face/corner geometry.
+4. Revalidate joints.
+5. Preserve valid joint type and relationships where possible.
+6. If an old joint cannot be migrated safely:
+   - Remove only that invalid joint.
+   - Preserve both pieces.
+   - Report the migration diagnostically.
+7. Revalidate the Level 1 prebuilt structure.
+8. Revalidate construction boundaries.
+9. Ensure old final-result snapshots do not become active attempts.
+10. Preserve inventory counts.
+
+Do not silently stretch old structures.
+
+For prototype active attempts, it is acceptable to:
+
+- Preserve profile preferences.
+- Reset the current construction attempt safely to the updated Level 1 template
+  if geometry migration cannot be trusted.
+
+Document the selected migration strategy.
+
+PREBUILT STRUCTURE
+
+After selecting modular dimensions, update Level 1 prebuilt geometry so:
+
+- Columns align to construction units.
+- Beam spans correspond to block spacing.
+- Environmental anchors remain valid.
+- The structure is stable before player additions.
+- No piece begins in overlap.
+- The available construction area remains usable.
+- Three-wisp placement remains possible.
+
+Do not use arbitrary visual offsets to make the updated template appear aligned.
+
+COLLIDER AND VISUAL CONSISTENCY
+
+Verify:
+
+- Visual bounds match collider bounds.
+- Beam endpoints match visible beam ends.
+- Block corners match visible corners.
+- Connector graphics do not change collision.
+- Camera zoom does not affect geometry.
+- Device-pixel ratio does not affect snap results.
+- Player and Developer Presentation use the same authoritative placement geometry.
+
+STABILITY AND JOINT PHYSICS
+
+Do not increase joint strength merely to compensate for poor alignment.
+
+After geometry correction:
+
+- A roof with a valid peak and both lower ends supported should remain assembled
+  under ordinary gravity when supports are stable.
+- A roof with an unsupported lower end should shift, spread, pivot, strain, or
+  fail.
+- A roof with two unsupported lower ends should not float.
+- Losing one support may cause asymmetric collapse.
+- A Roof Peak should be more suitable than an ordinary collinear splice for
+  supported roof compression.
+- The Roof Peak remains vulnerable to tension, spreading supports, lateral
+  shear, and impacts.
+
+The physics result should now reflect the player’s intended geometry accurately.
+
+UNDO AND REDO
+
+Treat balanced peak adjustment as one atomic operation.
+
+History must include:
+
+- Prior transforms for every moved piece
+- New transforms
+- Prior joint graph
+- New joint graph
+- Candidate type
+- Construction revision
+
+Undo and redo must:
+
+- Restore exact geometry
+- Restore exact joints
+- Avoid duplicate constraints
+- Preserve inventory
+- Preserve manual angles
+
+Rejected previews and candidate cycling create no history entry.
+
+REINFORCEMENT
+
+Use the same refined geometry during reinforcement.
+
+Requirements:
+
+- Intact beams may form corner, peak, face, brace, and T-joints.
+- Broken debris exposes no construction sockets.
+- Surviving wisps block invalid manual placement.
+- Balanced adjustment may not move pieces through wisps.
+- Broken joints remain broken unless a completely new valid connection is
+  intentionally formed with intact components.
+- Do not implement repair.
+
+TUTORIAL AND DISCOVERY
+
+Do not expand the initial Level 1 tutorial substantially.
+
+Keep the current basic lesson.
+
+Add contextual one-time hints:
+
+First block-corner rafter seat:
+
+“Rafter ends can rest on wall corners.”
+
+First clean L-corner:
+
+“Corner joints create post-and-beam frames.”
+
+First completed roof:
+
+“A roof stands best when the peak and both lower ends are supported.”
+
+If the peak connects but one lower support is missing:
+
+“The peak is connected, but one rafter still needs support.”
+
+Do not freeze the builder unnecessarily.
+
+DEVELOPER DIAGNOSTICS
+
+Add or confirm:
+
+- Geometry schema version
+- Base construction unit
+- Piece dimensions in units
+- Piece visual dimensions
+- Piece collider dimensions
+- Candidate type
+- Source feature type
+- Source corner/face/socket ID
+- Target feature type
+- Target corner/face/socket ID
+- Source face normal
+- Target face normal
+- Relative angle
+- Endpoint separation
+- Seam separation
+- Apex world coordinate
+- Apex symmetry offset
+- Balanced adjustment active
+- Piece A correction
+- Piece B correction
+- Placement-order comparison
+- Lower-left rafter support state
+- Lower-right rafter support state
+- Peak joint state
+- Candidate ranking components
+- Candidate-cycle index
+- Snap hysteresis state
+- Nonpermitted overlap depth
+- Migration result
+- Invalid migrated joint count
+
+Diagnostics must not influence placement.
+
+AUTOMATED TESTS
+
+Add targeted tests for:
+
+1. Authoritative piece dimensions derive from one unit system.
+2. A known integer number of blocks equals one beam length.
+3. Visual and collider dimensions agree.
+4. Beam corners transform correctly at 0, 45, 90, and -45 degrees.
+5. Block corners transform correctly.
+6. Angled endpoint prefers a near block corner over a distant face center.
+7. Timber-to-wood corner joint creation.
+8. Timber-to-stone supported corner contact.
+9. Vertical-to-horizontal L-corner alignment.
+10. L-corner placement-order independence.
+11. Left-end and right-end mirror behavior.
+12. Equal opposing rafters form one symmetric Roof Peak.
+13. Symmetric roof placement-order independence.
+14. Roof Peak creates exactly one joint.
+15. Roof Peak does not also create a splice.
+16. Unequal valid roof slopes create a clean asymmetric peak.
+17. Both lower supports detected correctly.
+18. Missing lower support detected correctly.
+19. Balanced peak adjustment moves both editable rafters atomically.
+20. Balanced adjustment cancel restores both.
+21. Balanced adjustment undo/redo restores both and joint graph.
+22. Candidate cycling is deterministic.
+23. Candidate hysteresis prevents flicker.
+24. Existing T-joint remains intentional.
+25. Invalid overlap remains rejected.
+26. Supported roof survives ordinary gravity when supports are stable.
+27. Unsupported roof does not float.
+28. Loss of one support may produce asymmetric collapse.
+29. Repeated stability tests do not duplicate joints.
+30. Geometry migration preserves IDs and valid relationships.
+31. Old invalid geometry resets safely where required.
+32. Reinforcement uses the same corner and peak geometry.
+33. Camera zoom and viewport do not change results.
+34. TypeScript and production build pass.
+35. All existing test suites remain passing.
+
+ACCEPTANCE SCENARIOS
+
+A. MODULAR SPAN
+
+- Place standard blocks in a row.
+- Place one Timber Beam above them.
+- Confirm the selected modular ratio is visually and geometrically exact.
+- Confirm no accumulating unexplained gap.
+
+B. VERTICAL-TO-HORIZONTAL CORNER
+
+- Place a horizontal beam.
+- Bring a vertical beam to its left end.
+- Confirm clean L-corner preview.
+- Commit.
+- Repeat at the right end.
+- Confirm mirrored result.
+
+C. REVERSE CORNER ORDER
+
+- Place vertical first, horizontal second.
+- Confirm the same resulting seam and joint.
+
+D. ANGLED RAFTER ON BLOCK CORNER
+
+- Place a wall block.
+- Rotate a rafter to 45 degrees.
+- Approach the upper inner corner.
+- Confirm Corner Seat or Corner Joint preview.
+- Confirm no pull toward a farther face-center candidate.
+- Commit and test.
+
+E. SYMMETRIC PEAKED ROOF
+
+- Build equal-height supports.
+- Use equal and opposite rafter angles.
+- Seat lower endpoints at corresponding corners.
+- Join upper endpoints.
+- Confirm shared centered apex.
+- Confirm both lower supports recognized.
+- Test stability.
+- Confirm roof remains assembled under ordinary gravity.
+
+F. REVERSE RAFTER ORDER
+
+- Repeat Scenario E with opposite placement order.
+- Confirm equivalent geometry and joint graph.
+
+G. MISSING LOWER SUPPORT
+
+- Build a valid peak with only one lower support.
+- Confirm preview identifies the unresolved side.
+- Test stability.
+- Confirm the roof shifts or fails naturally.
+
+H. ASYMMETRIC ROOF
+
+- Use unequal support heights or unequal valid slopes.
+- Confirm clean endpoint seam.
+- Confirm no forced symmetry.
+- Test stability.
+
+I. CANDIDATE AMBIGUITY
+
+- Position a vertical beam where Corner Joint, T-Joint, and Face Joint are all
+  plausible.
+- Confirm deterministic default.
+- Cycle candidates.
+- Confirm each preview is distinct and stable.
+- Commit the selected relationship.
+
+J. REPEATED TEST AND RESTORE
+
+- Build a frame containing corners, rafters, peak, brace, and T-joint.
+- Test and restore three times.
+- Confirm body, joint, and constraint counts remain constant.
+- Confirm no increasing energy.
+
+K. PROJECTILE IMPACT
+
+- Strike the supported roof.
+- Confirm joints flex, strain, or break according to force.
+- Confirm geometry remains physically meaningful.
+- Confirm damage and joint failure remain separate.
+
+L. REINFORCEMENT
+
+- Form a corner or rafter support during reinforcement.
+- Confirm same snap behavior.
+- Confirm no overlap with surviving wisps.
+- Confirm history remains correct.
+
+M. PERSISTENCE AND MIGRATION
+
+- Load old geometry data.
+- Verify migration or safe reset.
+- Reload new modular construction.
+- Retry Design.
+- Start Over.
+- Confirm IDs, inventory, joints, and three-wisp state remain valid.
+
+N. REGRESSION
+
+Run all accepted suites:
+
+- Startup/reset
+- Three-wisp Level 1
+- Construction dragging
+- Rotation validation
+- Automatic joint editing
+- Timber joints
+- Angled connections
+- Wisp placement and enclosure
+- Wisp–debris contact
+- Siege lifecycle
+- Reinforcement
+- Bullseye
+- Presentation and POV
+- TypeScript
+- Production build
+
+DELIVERY REQUIREMENTS
+
+Create the complete implementation and open the preview.
+
+Report:
+
+1. Files changed
+2. Previous piece-dimension relationships
+3. Selected modular unit system
+4. New piece dimensions
+5. Geometry schema and migration strategy
+6. Block-corner geometry
+7. Timber-corner geometry
+8. L-corner recognition
+9. Rafter corner-seat behavior
+10. Shared-apex solver
+11. Balanced peak adjustment
+12. Placement-order independence
+13. Candidate ranking
+14. Candidate cycling
+15. Roof-support summary
+16. Stability and joint behavior
+17. Reinforcement behavior
+18. Automated tests added
+19. Results for acceptance scenarios A through N
+20. Confirmation that materials, attacks, wisp thresholds, and Level 1 balance
+    were unchanged
+21. Known limitations
+
+Do not claim this milestone passes merely because rafters visually overlap or a
+roof remains standing.
+
+It passes only if:
+
+- Piece dimensions use an intentional modular relationship.
+- Vertical and horizontal beams form predictable flush corners.
+- Angled rafters seat naturally at block corners.
+- Equal opposing rafters form a centered shared apex.
+- Placement order does not change symmetric results.
+- Lower support state is communicated.
+- Unsupported roofs remain physically vulnerable.
+- Joints remain breakable.
+- Existing construction, siege, three-wisp, reset, and persistence systems remain
+  correct.

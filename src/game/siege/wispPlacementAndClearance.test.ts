@@ -71,8 +71,8 @@ console.log('===================================================================
     `Test A: Expected wispBlockerCount === 0 in BUILD, got ${wispDiag.wispBlockerCount}`,
   );
   assert(
-    wispDiag.wispStagingCount === 5,
-    `Test A: Expected wispStagingCount === 5 in BUILD, got ${wispDiag.wispStagingCount}`,
+    wispDiag.wispStagingCount === 3,
+    `Test A: Expected wispStagingCount === 3 in BUILD, got ${wispDiag.wispStagingCount}`,
   );
   assert(
     state.wisps.every((w) => w.placed === false),
@@ -173,20 +173,20 @@ console.log('===================================================================
 
   const diag = store.getWispPresenceDiagnostics(sc.mode);
   assert(
-    diag.wispBattlefieldCount === 0 && diag.wispStagingCount === 5,
-    `Test C: Placed-wisp count starts at 0/5 with all 5 in staging (got BF=${diag.wispBattlefieldCount}, Stg=${diag.wispStagingCount})`,
+    diag.wispBattlefieldCount === 0 && diag.wispStagingCount === 3,
+    `Test C: Placed-wisp count starts at 0/3 with all 3 in staging (got BF=${diag.wispBattlefieldCount}, Stg=${diag.wispStagingCount})`,
   );
   assert(
     store.getState().wisps.every((w) => w.placed === false),
-    'Test C: All 5 wisps are unplaced in the staging tray',
+    'Test C: All 3 wisps are unplaced in the staging tray',
   );
   assert(
     sc.enterPreSiegeReview() === false,
-    'Test C: Pre-Siege Review remains disabled until all 5 wisps are placed',
+    'Test C: Pre-Siege Review remains disabled until all 3 wisps are placed',
   );
   assert(
     sc.canBeginSiege().allowed === false,
-    'Test C: Begin Siege remains disabled until all 5 wisps are placed',
+    'Test C: Begin Siege remains disabled until all 3 wisps are placed',
   );
 
   console.log('✓ Test C (Entering PLACE_WISPS): PASSED');
@@ -214,8 +214,8 @@ console.log('===================================================================
   // Tap Default Slots (allowFallbackOffsets = false)
   const placedCount = store.placeAllWispsInDefaultSanctuarySlots(false);
   assert(
-    placedCount === 4,
-    `Test D: Expected 4 unblocked default slots to be placed and 1 blocked slot skipped, got ${placedCount}`,
+    placedCount === 2,
+    `Test D: Expected 2 unblocked default slots to be placed and 1 blocked slot skipped, got ${placedCount}`,
   );
 
   const ignis = store.getState().wisps.find((w) => w.id === 'wisp_ignis')!;
@@ -282,13 +282,11 @@ console.log('===================================================================
     'Test E: Rejects wisp placement overlapping another placed wisp',
   );
 
-  // 5. Place remaining 4 wisps in valid sanctuary space
+  // 5. Place remaining 2 wisps in valid sanctuary space
   assert(store.placeWisp('wisp_zephyr', { x: 345, y: 725 }).success, 'Test E: Placed wisp_zephyr');
-  assert(store.placeWisp('wisp_terran', { x: 400, y: 705 }).success, 'Test E: Placed wisp_terran');
   assert(store.placeWisp('wisp_marinus', { x: 460, y: 725 }).success, 'Test E: Placed wisp_marinus');
-  assert(store.placeWisp('wisp_aetheris', { x: 530, y: 685 }).success, 'Test E: Placed wisp_aetheris');
 
-  assert(store.areAllWispsPlacedAndValid() === true, 'Test E: All 5 wisps validly placed');
+  assert(store.areAllWispsPlacedAndValid() === true, 'Test E: All 3 wisps validly placed');
   assert(sc.enterPreSiegeReview() === true, 'Test E: Entered PRE_SIEGE_REVIEW');
   assert(sc.canBeginSiege().allowed === true, 'Test E: Siege is now allowed');
 
@@ -322,7 +320,7 @@ console.log('===================================================================
   assert(
     diag.wispBattlefieldCount === 0 &&
       diag.wispBlockerCount === 0 &&
-      diag.wispStagingCount === 5,
+      diag.wispStagingCount === 3,
     `Test F: All wisps returned to staging (BF=${diag.wispBattlefieldCount}, Blk=${diag.wispBlockerCount}, Stg=${diag.wispStagingCount})`,
   );
   assert(
@@ -579,16 +577,16 @@ console.log('===================================================================
   store.lockWispsForSiege();
   store.setReinforcementMode(true);
 
-  // Place a horizontal beam at (365, 669) above and slightly west of surviving wisp_terran at (400, 704)
-  // At 0°: beam y-max is 681 (distance to wisp center (400, 704) is 23px > 18px clearance), valid!
-  // At +45°: beam's right half swings down through (400, 704), colliding directly with wisp_terran!
-  const reinfBeam = makePiece('wood_beam', 365, 669, 0);
+  // Place a horizontal beam at (305, 695) above and slightly west of surviving wisp_zephyr at (340, 730)
+  // At 0°: beam y-max is 707 (distance to wisp center (340, 730) is 23px > 18px clearance), valid!
+  // At +45°: beam's right half swings down through (340, 730), colliding directly with wisp_zephyr!
+  const reinfBeam = makePiece('wood_beam', 305, 695, 0);
   assert(
     store.placePiece(reinfBeam) === true,
-    'Test L: Placed horizontal beam above surviving wisp_terran in REINFORCEMENT',
+    'Test L: Placed horizontal beam above surviving wisp_zephyr in REINFORCEMENT',
   );
 
-  // Attempt to rotate beam +45° so it swings down into surviving wisp_terran at (400, 704)
+  // Attempt to rotate beam +45° so it swings down into surviving wisp_zephyr at (340, 730)
   const rotIntoWisp = store.rotatePiece(reinfBeam.id, Math.PI / 4);
   assert(
     rotIntoWisp === false,
@@ -601,9 +599,9 @@ console.log('===================================================================
     `Test L: Expected WISP_OVERLAP, got ${store.lastRotationDiagnostics?.lastRejectionReason}`,
   );
 
-  // If wisp_terran is dispersed, rotating into its former space is allowed
-  const terran = store.getState().wisps.find((w) => w.id === 'wisp_terran')!;
-  terran.isDispersed = true;
+  // If wisp_zephyr is dispersed, rotating into its former space is allowed
+  const zephyr = store.getState().wisps.find((w) => w.id === 'wisp_zephyr')!;
+  zephyr.isDispersed = true;
   const rotAfterDispersed = store.rotatePiece(reinfBeam.id, Math.PI / 4);
   assert(
     rotAfterDispersed === true,
@@ -647,17 +645,15 @@ console.log('===================================================================
     placeWispsReload.recoveredPhase === 'PLACE_WISPS' && sc.mode === 'PLACE_WISPS',
     'Test M: Reload during PLACE_WISPS restores PLACE_WISPS',
   );
-  assert(store.getState().wisps.length === 5, 'Test M: No wisp duplication on reload');
+  assert(store.getState().wisps.length === 3, 'Test M: No wisp duplication on reload (3 active wisps)');
   assert(
     store.getWispPresenceDiagnostics('PLACE_WISPS').wispBattlefieldCount === 2 &&
-      store.getWispPresenceDiagnostics('PLACE_WISPS').wispStagingCount === 3,
-    'Test M: PLACE_WISPS reload preserves 2 placed wisps and 3 unplaced wisps',
+      store.getWispPresenceDiagnostics('PLACE_WISPS').wispStagingCount === 1,
+    'Test M: PLACE_WISPS reload preserves 2 placed wisps and 1 unplaced wisp',
   );
 
   // 3. Complete wisp placement, enter PRE_SIEGE_REVIEW, reload, then Begin Siege & Retry Design
-  assert(store.placeWisp('wisp_terran', { x: 400, y: 705 }).success, 'Test M: Placed terran');
   assert(store.placeWisp('wisp_marinus', { x: 460, y: 725 }).success, 'Test M: Placed marinus');
-  assert(store.placeWisp('wisp_aetheris', { x: 530, y: 690 }).success, 'Test M: Placed aetheris');
   assert(sc.enterPreSiegeReview() === true, 'Test M: Entered PRE_SIEGE_REVIEW');
 
   const reviewReload = sc.simulateSafeReload();
@@ -672,18 +668,18 @@ console.log('===================================================================
   assert(
     store.getPlayerPlacedPieces().length === 2 &&
       afterRetry.wisps.every((w) => w.placed === true) &&
-      afterRetry.wisps.find((w) => w.id === 'wisp_aetheris')!.position.x === 530,
+      afterRetry.wisps.find((w) => w.id === 'wisp_marinus')!.position.x === 460,
     'Test M: Retry Design restores submitted fortress and submitted wisp arrangement',
   );
 
-  // 4. Start Over returns all 5 wisps to staging (placed: false) and clears player pieces
+  // 4. Start Over returns all 3 wisps to staging (placed: false) and clears player pieces
   sc.startOver();
   assert(
     store.getPlayerPlacedPieces().length === 0 &&
       store.getState().wisps.every((w) => w.placed === false) &&
       store.getWispPresenceDiagnostics('CONSTRUCTION').wispBattlefieldCount === 0 &&
-      store.getWispPresenceDiagnostics('CONSTRUCTION').wispStagingCount === 5,
-    'Test M: Start Over restores original prebuilt environment and returns all 5 wisps to staging (placed: false)',
+      store.getWispPresenceDiagnostics('CONSTRUCTION').wispStagingCount === 3,
+    'Test M: Start Over restores original prebuilt environment and returns all 3 wisps to staging (placed: false)',
   );
 
   console.log('✓ Test M (Reload and Restore): PASSED');

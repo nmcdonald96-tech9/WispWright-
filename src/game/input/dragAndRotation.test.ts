@@ -474,10 +474,10 @@ test('V2 TEST C: Upright Beam on Block (90°) - Snaps bottom endpoint to block t
   };
   store.placePiece(baseBlock);
 
-  // Rotate a timber beam to 90° (vertical post: height=120 along Y, half-length=60)
-  // For its bottom endpoint to rest flush on block top edge (y=732), beam center should be at (152, 672)
+  // Rotate a timber beam to 90° (vertical post: height=144 along Y, half-length=72)
+  // For its bottom endpoint to rest flush on block top edge (y=732), beam center should be at (152, 660)
   const verticalRot = Math.PI / 2;
-  const approachPos: Vector2 = { x: 157, y: 678 }; // Within endpoint snap radius of (152, 672)
+  const approachPos: Vector2 = { x: 157, y: 666 }; // Within endpoint snap radius of (152, 660)
 
   const snap = solveSnapAndValidation(
     'wood_beam',
@@ -499,7 +499,7 @@ test('V2 TEST C: Upright Beam on Block (90°) - Snaps bottom endpoint to block t
   assert.equal(snap.socketCompatibility, 'BEAM_END_TO_BLOCK_EDGE');
   assert.ok(Math.abs(snap.rotation - verticalRot) < 0.001, '90° vertical rotation must be preserved');
   assert.equal(snap.position.x, 152);
-  assert.ok(Math.abs(snap.position.y - 672) < 0.5, `Expected y=672, got ${snap.position.y}`);
+  assert.ok(Math.abs(snap.position.y - 660) < 0.5, `Expected y=660, got ${snap.position.y}`);
   assert.equal(snap.explicitJointProposed, false, 'Must not auto-weld ordinary piece-to-piece contact');
   assert.equal(snap.attachedAnchorId, undefined, 'Upper piece must not inherit bedrock anchor weld');
 });
@@ -507,20 +507,20 @@ test('V2 TEST C: Upright Beam on Block (90°) - Snaps bottom endpoint to block t
 test('V2 TEST D: Block on Upright Beam - Snaps block bottom edge to upright beam top endpoint', () => {
   const store = new LevelStore();
 
-  // Place an upright 90° beam standing at (152, 720) -> top endpoint is at (152, 660)
+  // Place an upright 90° beam standing at (152, 708) -> top endpoint is at (152, 636)
   const uprightBeam: PlacedPiece = {
     id: 'upright_beam_1',
     type: 'wood_beam',
-    position: { x: 152, y: 720 },
+    position: { x: 152, y: 708 },
     rotation: Math.PI / 2,
     isPrebuilt: false,
   };
   store.placePiece(uprightBeam);
 
-  // Drag a wooden block (48x48, halfH=24) near top of upright beam -> expected block center (152, 636)
+  // Drag a wooden block (48x48, halfH=24) near top of upright beam -> expected block center (152, 612)
   const snap = solveSnapAndValidation(
     'wood_block',
-    { x: 156, y: 641 },
+    { x: 156, y: 617 },
     0,
     store.getState().pieces,
     store.getState().anchors,
@@ -536,28 +536,28 @@ test('V2 TEST D: Block on Upright Beam - Snaps block bottom edge to upright beam
   assert.equal(snap.isValid, true, 'Block on upright beam must be valid without overlap');
   assert.equal(snap.socketCompatibility, 'BLOCK_EDGE_TO_BEAM_END');
   assert.equal(snap.position.x, 152);
-  assert.ok(Math.abs(snap.position.y - 636) < 0.5, `Expected y=636, got ${snap.position.y}`);
+  assert.ok(Math.abs(snap.position.y - 612) < 0.5, `Expected y=612, got ${snap.position.y}`);
   assert.equal(snap.supportedContactPredicted, true);
 });
 
 test('V2 TEST E: Beam-to-Beam End Stacking - Vertical beam snaps end-to-end onto another vertical beam', () => {
   const store = new LevelStore();
 
-  // Lower vertical beam at (152, 720) -> top end at (152, 660)
+  // Lower vertical beam at (152, 708) -> top end at (152, 636)
   const lowerPost: PlacedPiece = {
     id: 'lower_post',
     type: 'wood_beam',
-    position: { x: 152, y: 720 },
+    position: { x: 152, y: 708 },
     rotation: Math.PI / 2,
     isPrebuilt: false,
   };
   store.placePiece(lowerPost);
 
-  // Upper vertical beam (90°, half-length=60) approaching top end -> expected center (152, 600)
+  // Upper vertical beam (90°, half-length=72) approaching top end -> expected center (152, 564)
   const verticalRot = Math.PI / 2;
   const snap = solveSnapAndValidation(
     'wood_beam',
-    { x: 148, y: 606 },
+    { x: 148, y: 570 },
     verticalRot,
     store.getState().pieces,
     store.getState().anchors,
@@ -573,33 +573,33 @@ test('V2 TEST E: Beam-to-Beam End Stacking - Vertical beam snaps end-to-end onto
   assert.equal(snap.isValid, true);
   assert.equal(snap.socketCompatibility, 'BEAM_END_TO_BEAM_END');
   assert.equal(snap.position.x, 152);
-  assert.ok(Math.abs(snap.position.y - 600) < 0.5, `Expected y=600, got ${snap.position.y}`);
+  assert.ok(Math.abs(snap.position.y - 564) < 0.5, `Expected y=564, got ${snap.position.y}`);
   assert.ok(Math.abs(snap.rotation - verticalRot) < 0.001);
 });
 
 test('V2 TEST F: Horizontal Beam Across Upright Supports - Snaps cleanly to top of vertical post', () => {
   const store = new LevelStore();
 
-  // Two vertical beam posts at x=104 and x=152, y=720 -> top endpoints at y=660
+  // Two vertical beam posts at x=104 and x=152, y=708 -> top endpoints at y=636
   store.placePiece({
     id: 'post_left',
     type: 'wood_beam',
-    position: { x: 104, y: 720 },
+    position: { x: 104, y: 708 },
     rotation: Math.PI / 2,
     isPrebuilt: false,
   });
   store.placePiece({
     id: 'post_right',
     type: 'wood_beam',
-    position: { x: 152, y: 720 },
+    position: { x: 152, y: 708 },
     rotation: Math.PI / 2,
     isPrebuilt: false,
   });
 
-  // Drag horizontal lintel beam (0°, height=24, halfH=12) across the posts near y=648
+  // Drag horizontal lintel beam (0°, height=24, halfH=12) across the posts near y=624
   const snap = solveSnapAndValidation(
     'wood_beam',
-    { x: 128, y: 652 },
+    { x: 128, y: 628 },
     0,
     store.getState().pieces,
     store.getState().anchors,
@@ -614,7 +614,7 @@ test('V2 TEST F: Horizontal Beam Across Upright Supports - Snaps cleanly to top 
   assert.equal(snap.snapped, true, 'Horizontal lintel should snap to upright post top endpoint');
   assert.equal(snap.isValid, true, 'Horizontal lintel across posts must be valid');
   assert.equal(snap.socketCompatibility, 'BEAM_END_TO_BEAM_SIDE');
-  assert.ok(Math.abs(snap.position.y - 648) < 0.5, `Expected y=648, got ${snap.position.y}`);
+  assert.ok(Math.abs(snap.position.y - 624) < 0.5, `Expected y=624, got ${snap.position.y}`);
   assert.equal(snap.rotation, 0);
 });
 
@@ -711,10 +711,10 @@ test('V2 TEST K: Reinforcement Vertical Support - Reserve beam rotated to 90° s
   store.setReinforcementMode(true);
 
   const verticalRot = Math.PI / 2;
-  // Snap upright reserve beam onto prebuilt_stone_left_2 (x=200, y=708 -> top edge at y=684, center at y=624)
+  // Snap upright reserve beam onto prebuilt_stone_left_2 (x=200, y=708 -> top edge at y=684, center at y=612)
   const snap = solveSnapAndValidation(
     'wood_beam',
-    { x: 202, y: 626 },
+    { x: 202, y: 614 },
     verticalRot,
     store.getState().pieces,
     store.getState().anchors,
@@ -730,6 +730,6 @@ test('V2 TEST K: Reinforcement Vertical Support - Reserve beam rotated to 90° s
   assert.equal(snap.isValid, true);
   assert.ok(Math.abs(snap.rotation - verticalRot) < 0.001);
   assert.equal(snap.position.x, 200);
-  assert.ok(Math.abs(snap.position.y - 624) < 0.5);
+  assert.ok(Math.abs(snap.position.y - 612) < 0.5);
 });
 
