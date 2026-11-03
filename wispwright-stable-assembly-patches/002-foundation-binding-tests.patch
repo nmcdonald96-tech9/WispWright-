@@ -1,0 +1,105 @@
+diff --git a/src/game/physics/foundationBindings.test.ts b/src/game/physics/foundationBindings.test.ts
+new file mode 100644
+index 0000000..c006f1b
+--- /dev/null
++++ b/src/game/physics/foundationBindings.test.ts
+@@ -0,0 +1,99 @@
++/**
++ * @license
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { INITIAL_LEVEL_STATE } from '../config';
++import { LevelState, PlacedPiece } from '../types';
++import { PhysicsBridge } from './physicsBridge';
++
++function levelWithPieces(pieces: PlacedPiece[]): LevelState {
++  return {
++    ...INITIAL_LEVEL_STATE,
++    pieces,
++    joints: [],
++    wisps: [],
++  };
++}
++
++test('Foundation Binding: grounded player block receives one logical breakable base binding', () => {
++  const block: PlacedPiece = {
++    id: 'foundation_wood',
++    type: 'wood_block',
++    position: { x: 360, y: 756 },
++    rotation: 0,
++    isPrebuilt: false,
++  };
++  const bridge = new PhysicsBridge(levelWithPieces([block]));
++
++  assert.deepEqual(bridge.getFoundationBindingDiagnostics(), [
++    {
++      pieceId: 'foundation_wood',
++      state: 'INTACT',
++      failureReason: null,
++    },
++  ]);
++  assert.equal(bridge.diagnostics.activeFoundationBindingCount, 1);
++  assert.equal(bridge.diagnostics.brokenFoundationBindingCount, 0);
++
++  for (let i = 0; i < 180; i++) bridge.step(16.666);
++  const transform = bridge.getSimulatedTransforms([block])[0];
++  assert.ok(Math.abs(transform.position.x - 360) < 0.35);
++  assert.ok(Math.abs(transform.position.y - 756) < 0.35);
++  assert.ok(Math.abs(transform.rotation) < 0.01);
++
++  bridge.teardown();
++});
++
++test('Foundation Binding: floating or rotated pieces are not silently anchored', () => {
++  const floating: PlacedPiece = {
++    id: 'floating_wood',
++    type: 'wood_block',
++    position: { x: 320, y: 650 },
++    rotation: 0,
++    isPrebuilt: false,
++  };
++  const rotatedOnGround: PlacedPiece = {
++    id: 'rotated_wood',
++    type: 'wood_block',
++    position: { x: 440, y: 746.06 },
++    rotation: Math.PI / 4,
++    isPrebuilt: false,
++  };
++  const bridge = new PhysicsBridge(levelWithPieces([floating, rotatedOnGround]));
++
++  assert.equal(bridge.getFoundationBindingDiagnostics().length, 0);
++  assert.equal(bridge.diagnostics.activeFoundationBindingCount, 0);
++
++  bridge.teardown();
++});
++
++test('Foundation Binding: meaningful direct impact breaks the base binding without making the body static', () => {
++  const block: PlacedPiece = {
++    id: 'impact_wood',
++    type: 'wood_block',
++    position: { x: 400, y: 756 },
++    rotation: 0,
++    isPrebuilt: false,
++  };
++  const bridge = new PhysicsBridge(levelWithPieces([block]));
++  const internal = bridge as unknown as {
++    applyPieceDamage(pieceId: string, impulse: number): void;
++  };
++
++  internal.applyPieceDamage('impact_wood', Number.MAX_SAFE_INTEGER);
++
++  assert.deepEqual(bridge.getFoundationBindingDiagnostics(), [
++    {
++      pieceId: 'impact_wood',
++      state: 'BROKEN',
++      failureReason: 'CONNECTED_PIECE_BROKEN',
++    },
++  ]);
++  assert.equal(bridge.diagnostics.activeFoundationBindingCount, 0);
++  assert.equal(bridge.diagnostics.brokenFoundationBindingCount, 1);
++
++  bridge.teardown();
++});

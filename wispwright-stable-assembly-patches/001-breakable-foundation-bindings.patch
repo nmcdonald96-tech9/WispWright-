@@ -1,0 +1,243 @@
+diff --git a/src/game/physics/physicsBridge.ts b/src/game/physics/physicsBridge.ts
+index ca8ac34..dcbd651 100644
+--- a/src/game/physics/physicsBridge.ts
++++ b/src/game/physics/physicsBridge.ts
+@@ -39,6 +39,18 @@ export interface SimulatedPieceTransform {
+   bullseyeExpired?: boolean;
+ }
+ 
++interface FoundationBindingRecord {
++  pieceId: string;
++  constraints: Matter.Constraint[];
++  restPosition: Vector2;
++  restAngle: number;
++  breakDisplacementPx: number;
++  breakAngleRad: number;
++  breakImpulseThreshold: number;
++  state: 'INTACT' | 'BROKEN';
++  failureReason: string | null;
++}
++
+ export interface DetailedPhysicsDiagnostics {
+   logicalPieceCount: number;
+   physicsBodyCount: number;
+@@ -46,6 +58,8 @@ export interface DetailedPhysicsDiagnostics {
+   activeTimberJointCount: number;
+   strainedTimberJointCount: number;
+   brokenTimberJointCount: number;
++  activeFoundationBindingCount: number;
++  brokenFoundationBindingCount: number;
+   initialOverlapCount: number;
+   maxInitialPenetration: number;
+   initialKineticEnergy: number;
+@@ -82,6 +96,7 @@ export class PhysicsBridge {
+   private anchorConstraintMap: Map<string, Matter.Constraint> = new Map();
+   private timberJoints: Map<string, TimberJoint> = new Map();
+   private timberJointConstraintMap: Map<string, Matter.Constraint> = new Map();
++  private foundationBindings: Map<string, FoundationBindingRecord> = new Map();
+   private brokenDuringGravityTestCount = 0;
+   public lastBrokenTimberJointReason: string | null = null;
+   private isRunning = false;
+@@ -146,6 +161,8 @@ export class PhysicsBridge {
+       activeTimberJointCount: 0,
+       strainedTimberJointCount: 0,
+       brokenTimberJointCount: 0,
++      activeFoundationBindingCount: 0,
++      brokenFoundationBindingCount: 0,
+       initialOverlapCount: 0,
+       maxInitialPenetration: 0,
+       initialKineticEnergy: 0,
+@@ -267,6 +284,8 @@ export class PhysicsBridge {
+           Composite.add(world, weldConstraint);
+         }
+       }
++
++      this.createFoundationBindingIfEligible(piece, body, config, ground);
+     }
+ 
+     // 5B. Compliant, Breakable Timber Joint Constraints (1 constraint per active joint)
+@@ -432,6 +451,110 @@ export class PhysicsBridge {
+     return false;
+   }
+ 
++  private createFoundationBindingIfEligible(
++    piece: PlacedPiece,
++    body: Matter.Body,
++    config: (typeof MATERIAL_CONFIGS)[MaterialType],
++    ground: Matter.Body,
++  ): void {
++    if (
++      piece.isPrebuilt ||
++      piece.attachedAnchorId ||
++      piece.condition === 'BROKEN' ||
++      piece.condition === 'LOST' ||
++      (piece.type !== 'wood_block' &&
++        piece.type !== 'stone_block' &&
++        piece.type !== 'bullseye_block')
++    ) {
++      return;
++    }
++
++    const normalizedAngle = Math.atan2(Math.sin(piece.rotation), Math.cos(piece.rotation));
++    const cardinalAngleError = Math.min(
++      Math.abs(normalizedAngle),
++      Math.abs(Math.abs(normalizedAngle) - Math.PI),
++    );
++    const bottomGap = Math.abs(body.bounds.max.y - WORLD_CONFIG.groundY);
++    if (cardinalAngleError > (3 * Math.PI) / 180 || bottomGap > 2.5) {
++      return;
++    }
++
++    const isStone = piece.type === 'stone_block' || piece.type === 'bullseye_block';
++    const halfSpan = config.width * 0.34;
++    const localY = config.height / 2;
++    const stiffness = isStone ? 0.94 : 0.88;
++    const damping = isStone ? 0.34 : 0.30;
++    const constraints = [-halfSpan, halfSpan].map((localX) => {
++      const pointA = { x: localX, y: localY };
++      const worldPoint = Vec2.add(body.position, Vec2.rotate(pointA, body.angle));
++      return Constraint.create({
++        bodyA: body,
++        pointA,
++        bodyB: ground,
++        pointB: Vec2.sub(worldPoint, ground.position),
++        length: 0,
++        stiffness,
++        damping,
++        render: { visible: false },
++      });
++    });
++
++    const thresholds = DAMAGE_THRESHOLDS[piece.type];
++    this.foundationBindings.set(piece.id, {
++      pieceId: piece.id,
++      constraints,
++      restPosition: { x: piece.position.x, y: piece.position.y },
++      restAngle: piece.rotation,
++      breakDisplacementPx: isStone ? 11 : 8,
++      breakAngleRad: isStone ? 0.24 : 0.18,
++      breakImpulseThreshold: thresholds.crackImpulse * (isStone ? 0.95 : 0.80),
++      state: 'INTACT',
++      failureReason: null,
++    });
++    Composite.add(this.engine.world, constraints);
++    this.syncFoundationBindingDiagnosticsCounts();
++  }
++
++  private breakFoundationBinding(pieceId: string, reason: string): void {
++    const binding = this.foundationBindings.get(pieceId);
++    if (!binding || binding.state === 'BROKEN') return;
++
++    binding.state = 'BROKEN';
++    binding.failureReason = reason;
++    for (const constraint of binding.constraints) {
++      Composite.remove(this.engine.world, constraint);
++    }
++    binding.constraints = [];
++
++    const body = this.pieceBodyMap.get(pieceId);
++    if (body) Sleeping.set(body, false);
++    this.syncFoundationBindingDiagnosticsCounts();
++  }
++
++  private syncFoundationBindingDiagnosticsCounts(): void {
++    let active = 0;
++    let broken = 0;
++    for (const binding of this.foundationBindings.values()) {
++      if (binding.state === 'BROKEN') broken++;
++      else active++;
++    }
++    this.diagnostics.activeFoundationBindingCount = active;
++    this.diagnostics.brokenFoundationBindingCount = broken;
++    this.diagnostics.constraintCount = Composite.allConstraints(this.engine.world).length;
++  }
++
++  public getFoundationBindingDiagnostics(): Array<{
++    pieceId: string;
++    state: 'INTACT' | 'BROKEN';
++    failureReason: string | null;
++  }> {
++    return Array.from(this.foundationBindings.values()).map((binding) => ({
++      pieceId: binding.pieceId,
++      state: binding.state,
++      failureReason: binding.failureReason,
++    }));
++  }
++
+   private breakTimberJoint(jointId: string, reason: string): void {
+     const joint = this.timberJoints.get(jointId);
+     if (!joint || joint.state === 'BROKEN') return;
+@@ -915,6 +1038,15 @@ export class PhysicsBridge {
+     const severity = Math.max(current.impactSeverity, Math.min(1.0, impulse / thresholds.breakImpulse));
+     this.pieceConditions.set(pieceId, { condition: newCondition, impactSeverity: severity });
+ 
++    const foundationBinding = this.foundationBindings.get(pieceId);
++    if (foundationBinding?.state === 'INTACT') {
++      if (newCondition === 'BROKEN') {
++        this.breakFoundationBinding(pieceId, 'CONNECTED_PIECE_BROKEN');
++      } else if (impulse >= foundationBinding.breakImpulseThreshold) {
++        this.breakFoundationBinding(pieceId, 'DIRECT_IMPACT_IMPULSE');
++      }
++    }
++
+     // Propagate impact shock to any active TimberJoint connected to this piece.
+     // Note: Timber joints have lower break thresholds than wood_beam bodies, so a joint can
+     // fracture cleanly while both connected beams remain INTACT or CRACKED.
+@@ -1037,6 +1169,23 @@ export class PhysicsBridge {
+ 
+     const fixedStep = 1000 / 60;
+ 
++    // Foundation-bound base pieces resist tiny solver drift and ordinary roof spreading,
++    // while remaining dynamic and breakable under meaningful displacement or impact.
++    for (const binding of this.foundationBindings.values()) {
++      if (binding.state === 'BROKEN') continue;
++      const body = this.pieceBodyMap.get(binding.pieceId);
++      if (!body) {
++        this.breakFoundationBinding(binding.pieceId, 'CONNECTED_PIECE_MISSING');
++        continue;
++      }
++      if (Math.abs(body.velocity.x) < 1.2) {
++        Body.setVelocity(body, { x: body.velocity.x * 0.82, y: body.velocity.y });
++      }
++      if (Math.abs(body.angularVelocity) < 0.08) {
++        Body.setAngularVelocity(body, body.angularVelocity * 0.78);
++      }
++    }
++
+     // 1. Pre-step: update rotated local anchor offsets & apply compliant angular spring-damper on active timber joints
+     for (const [jointId, joint] of this.timberJoints.entries()) {
+       if (joint.state === 'BROKEN') continue;
+@@ -1104,6 +1253,25 @@ export class PhysicsBridge {
+ 
+     this.simTimeAccumulator += fixedStep / 1000;
+ 
++    // Evaluate breakable foundation bindings after the physics step.
++    for (const binding of this.foundationBindings.values()) {
++      if (binding.state === 'BROKEN') continue;
++      const body = this.pieceBodyMap.get(binding.pieceId);
++      if (!body) {
++        this.breakFoundationBinding(binding.pieceId, 'CONNECTED_PIECE_MISSING');
++        continue;
++      }
++      const displacement = Vec2.distance(body.position, binding.restPosition);
++      const angleError = Math.abs(
++        shortestSignedAngleDelta(binding.restAngle, body.angle),
++      );
++      if (displacement > binding.breakDisplacementPx) {
++        this.breakFoundationBinding(binding.pieceId, 'FOUNDATION_DISPLACEMENT_EXCEEDED');
++      } else if (angleError > binding.breakAngleRad) {
++        this.breakFoundationBinding(binding.pieceId, 'FOUNDATION_ROTATION_EXCEEDED');
++      }
++    }
++
+     // 3. Post-step: evaluate timber joint stretch, bending angle, strain, and fracture
+     for (const [jointId, joint] of this.timberJoints.entries()) {
+       if (joint.state === 'BROKEN') continue;
+@@ -1470,6 +1638,7 @@ export class PhysicsBridge {
+     this.anchorConstraintMap.clear();
+     this.timberJoints.clear();
+     this.timberJointConstraintMap.clear();
++    this.foundationBindings.clear();
+     this.pieceConditions.clear();
+     this.dispersedWispIds.clear();
+     this.processedContacts.clear();
