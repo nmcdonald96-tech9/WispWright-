@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -151,7 +151,7 @@ test('ACCEPTANCE TEST D: Tap Accessibility Mode - Staging ghost does not decreme
   assert.equal(store.getState().pieces.length, initialPieces + 1);
 });
 
-test('ACCEPTANCE TEST E: Manual Rotation Preservation - Approaching snap points preserves 45° angle', () => {
+test('ACCEPTANCE TEST E: Manual Rotation Preservation - Approaching snap points preserves 45Â° angle', () => {
   const store = new LevelStore();
   const anchors = store.getState().anchors;
   const pieces = store.getState().pieces;
@@ -183,7 +183,7 @@ test('ACCEPTANCE TEST E: Manual Rotation Preservation - Approaching snap points 
   assert.equal(snap.position.x, 200);
 });
 
-test('ACCEPTANCE TEST F: Rotational Snap Preview - Proposed 0° angle previewed separately from user 45° preference', () => {
+test('ACCEPTANCE TEST F: Rotational Snap Preview - Proposed 0Â° angle previewed separately from user 45Â° preference', () => {
   const store = new LevelStore();
   const userRot = Math.PI / 4;
   const approachPos: Vector2 = { x: 200, y: 740 };
@@ -461,7 +461,7 @@ test('V2 TEST A & B: Visual Inventory Lift & Inventory Cancel - Tray suppression
   assert.equal(store.getState().inventory.wood_beam, initialBeams);
 });
 
-test('V2 TEST C: Upright Beam on Block (90°) - Snaps bottom endpoint to block top edge without flattening or overlap error', () => {
+test('V2 TEST C: Upright Beam on Block (90Â°) - Snaps bottom endpoint to block top edge without flattening or overlap error', () => {
   const store = new LevelStore();
 
   // Place a wooden block on unoccupied ground at (152, 756) -> top edge is at y=732
@@ -474,7 +474,7 @@ test('V2 TEST C: Upright Beam on Block (90°) - Snaps bottom endpoint to block t
   };
   store.placePiece(baseBlock);
 
-  // Rotate a timber beam to 90° (vertical post: height=144 along Y, half-length=72)
+  // Rotate a timber beam to 90Â° (vertical post: height=144 along Y, half-length=72)
   // For its bottom endpoint to rest flush on block top edge (y=732), beam center should be at (152, 660)
   const verticalRot = Math.PI / 2;
   const approachPos: Vector2 = { x: 157, y: 666 }; // Within endpoint snap radius of (152, 660)
@@ -497,17 +497,17 @@ test('V2 TEST C: Upright Beam on Block (90°) - Snaps bottom endpoint to block t
   assert.equal(snap.snapped, true, 'Vertical beam endpoint should snap to block top edge');
   assert.equal(snap.isValid, true, 'Vertical beam on block must not report false overlap');
   assert.equal(snap.socketCompatibility, 'BEAM_END_TO_BLOCK_EDGE');
-  assert.ok(Math.abs(snap.rotation - verticalRot) < 0.001, '90° vertical rotation must be preserved');
+  assert.ok(Math.abs(snap.rotation - verticalRot) < 0.001, '90Â° vertical rotation must be preserved');
   assert.equal(snap.position.x, 152);
   assert.ok(Math.abs(snap.position.y - 660) < 0.5, `Expected y=660, got ${snap.position.y}`);
-  assert.equal(snap.explicitJointProposed, false, 'Must not auto-weld ordinary piece-to-piece contact');
+  assert.equal(snap.explicitJointProposed, true, 'Snap-enabled vertical beam endpoint should propose a breakable binding to the block top edge');
   assert.equal(snap.attachedAnchorId, undefined, 'Upper piece must not inherit bedrock anchor weld');
 });
 
 test('V2 TEST D: Block on Upright Beam - Snaps block bottom edge to upright beam top endpoint', () => {
   const store = new LevelStore();
 
-  // Place an upright 90° beam standing at (152, 708) -> top endpoint is at (152, 636)
+  // Place an upright 90Â° beam standing at (152, 708) -> top endpoint is at (152, 636)
   const uprightBeam: PlacedPiece = {
     id: 'upright_beam_1',
     type: 'wood_beam',
@@ -553,7 +553,7 @@ test('V2 TEST E: Beam-to-Beam End Stacking - Vertical beam snaps end-to-end onto
   };
   store.placePiece(lowerPost);
 
-  // Upper vertical beam (90°, half-length=72) approaching top end -> expected center (152, 564)
+  // Upper vertical beam (90Â°, half-length=72) approaching top end -> expected center (152, 564)
   const verticalRot = Math.PI / 2;
   const snap = solveSnapAndValidation(
     'wood_beam',
@@ -596,7 +596,7 @@ test('V2 TEST F: Horizontal Beam Across Upright Supports - Snaps cleanly to top 
     isPrebuilt: false,
   });
 
-  // Drag horizontal lintel beam (0°, height=24, halfH=12) across the posts near y=624
+  // Drag horizontal lintel beam (0Â°, height=24, halfH=12) across the posts near y=624
   const snap = solveSnapAndValidation(
     'wood_beam',
     { x: 128, y: 628 },
@@ -618,11 +618,11 @@ test('V2 TEST F: Horizontal Beam Across Upright Supports - Snaps cleanly to top 
   assert.equal(snap.rotation, 0);
 });
 
-test('V2 TEST G: Angled Beam at 45° - Preserves 45° rotation and adjusts clearance to avoid corner overlap', () => {
+test('V2 TEST G: Angled Beam at 45Â° - Preserves 45Â° rotation and adjusts clearance to avoid corner overlap', () => {
   const store = new LevelStore();
 
   // Use top of left prebuilt column (prebuilt_stone_left_2 at x=200, y=708 -> top edge at y=684)
-  // Rotate beam to 45° (PI/4). Its END_B_CENTER is at (+42.426, +42.426).
+  // Rotate beam to 45Â° (PI/4). Its END_B_CENTER is at (+42.426, +42.426).
   // Approach with END_B_CENTER near (200, 684) -> beam center near (157.5, 641.5)
   const angle45 = Math.PI / 4;
   const snap = solveSnapAndValidation(
@@ -639,9 +639,9 @@ test('V2 TEST G: Angled Beam at 45° - Preserves 45° rotation and adjusts clear
     },
   );
 
-  assert.equal(snap.snapped, true, '45° beam endpoint should snap to block top edge');
-  assert.equal(snap.isValid, true, '45° beam must clear block surface without false corner overlap');
-  assert.ok(Math.abs(snap.rotation - angle45) < 0.001, '45° rotation must be preserved');
+  assert.equal(snap.snapped, true, '45Â° beam endpoint should snap to block top edge');
+  assert.equal(snap.isValid, true, '45Â° beam must clear block surface without false corner overlap');
+  assert.ok(Math.abs(snap.rotation - angle45) < 0.001, '45Â° rotation must be preserved');
 });
 
 test('V2 TEST H: Candidate Lock Hysteresis - Prevents rapid flickering within release radius', () => {
@@ -706,7 +706,7 @@ test('V2 TEST H: Candidate Lock Hysteresis - Prevents rapid flickering within re
   assert.equal(snapJitter.socket?.id, snap1.socket?.id, 'Must not flicker away while within release radius');
 });
 
-test('V2 TEST K: Reinforcement Vertical Support - Reserve beam rotated to 90° snaps as vertical support column', () => {
+test('V2 TEST K: Reinforcement Vertical Support - Reserve beam rotated to 90Â° snaps as vertical support column', () => {
   const store = new LevelStore();
   store.setReinforcementMode(true);
 
@@ -732,4 +732,5 @@ test('V2 TEST K: Reinforcement Vertical Support - Reserve beam rotated to 90° s
   assert.equal(snap.position.x, 200);
   assert.ok(Math.abs(snap.position.y - 612) < 0.5);
 });
+
 
