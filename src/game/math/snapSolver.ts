@@ -66,8 +66,10 @@ import {
   classifySupportFoundation,
   computeRoofSupportSummary,
   getVisualJointCapType,
+  MIN_BROAD_FACE_OVERLAP_PX,
   solveBlockCornerSeat,
   solveBlockCornerSeatFromBlockDrag,
+  solveBroadFaceOverlap,
   solveRoofAssemblyClosure,
   solveSharedApexRoofPeak,
   solveTimberLCorner,
@@ -1221,11 +1223,131 @@ export function solveSnapAndValidation(
         if (piece.condition === 'BROKEN') continue;
         const targetSockets = getPieceSnapSockets(piece);
 
+        // Continuous architectural face placement: normal-only correction and overlap-centered anchor.
+        const broadFaceSol = solveBroadFaceOverlap(
+          type, rawPos, preferredRot, piece, excludedPieceId || 'ghost',
+        );
+        let broadFaceHandledOnPiece = false;
+        if (broadFaceSol?.valid && broadFaceSol.normalCorrectionPx <= WORLD_CONFIG.snapDistance) {
+          const alignedPos = broadFaceSol.alignedPos;
+          const candOBB = createOBB(alignedPos, config.width, config.height, preferredRot);
+          let isOverlapFree = true;
+          let conflictingThirdPieceId: string | null = null;
+          for (const other of validPieces) {
+            const otherCfg = MATERIAL_CONFIGS[other.type];
+            const otherOBB = createOBB(other.position, otherCfg.width, otherCfg.height, other.rotation);
+            if (checkOBBOverlap(candOBB, otherOBB, other.id === piece.id ? 0.05 : 2.5)) {
+              isOverlapFree = false;
+              if (other.id !== piece.id) conflictingThirdPieceId = other.id;
+              break;
+            }
+          }
+          if (!checkPieceOverlapsWisps(candOBB, effectiveWisps).overlaps) {
+            broadFaceHandledOnPiece = true;
+            const closure = classifyArchitecturalClosure({
+              positionMismatchPx: broadFaceSol.normalCorrectionPx,
+              seamGapPx: broadFaceSol.seamSeparation,
+              hasColliderPenetration: !isOverlapFree,
+            });
+            const canon = buildCanonicalRelationship({
+              pieceAId: excludedPieceId || 'ghost', pieceAType: type,
+              pieceAPos: alignedPos, pieceARot: preferredRot,
+              featureAId: broadFaceSol.sourceFaceId,
+              pieceBId: piece.id, pieceBType: piece.type,
+              pieceBPos: piece.position, pieceBRot: piece.rotation,
+              featureBId: broadFaceSol.targetFaceId,
+              connectionTaxonomy: broadFaceSol.taxonomy,
+              jointProfileId: broadFaceSol.strengthProfile,
+            });
+            const proposal: ProposedTimberJoint = {
+              targetPieceId: piece.id,
+              sourceSocketId: broadFaceSol.sourceSocketId,
+              targetSocketId: broadFaceSol.targetSocketId,
+              sourceSocketName: broadFaceSol.sourceSocketName,
+              targetSocketName: broadFaceSol.targetSocketName,
+              localAnchorA: broadFaceSol.localAnchorA,
+              localAnchorB: broadFaceSol.localAnchorB,
+              worldPosition: broadFaceSol.worldContactPoint,
+              jointType: 'TIMBER_FACE',
+              restAngle: broadFaceSol.restAngle,
+              restSeparation: 0,
+              seamSeparation: broadFaceSol.seamSeparation,
+              strengthProfile: broadFaceSol.strengthProfile,
+              connectionTaxonomy: broadFaceSol.taxonomy,
+              connectionSubtype: broadFaceSol.connectionSubtype,
+              materialA: type,
+              materialB: piece.type,
+              materialPairKey: broadFaceSol.materialPairKey,
+              complianceProfile: broadFaceSol.strengthProfile,
+              isPrebuiltBinding: Boolean(piece.isPrebuilt),
+              creationReason: 'SNAP_COMMIT',
+              sourceFaceId: broadFaceSol.sourceFaceId,
+              targetFaceId: broadFaceSol.targetFaceId,
+              sourceCornerId: null,
+              targetCornerId: null,
+              sourceFeatureType: 'face',
+              targetFeatureType: 'face',
+              sourceFaceNormal: broadFaceSol.sourceFaceNormal,
+              targetFaceNormal: broadFaceSol.targetFaceNormal,
+              closureClassification: closure,
+              canonicalRelationship: canon,
+              visualConnectionState: 'CANDIDATE_PREVIEW',
+              visualJointCapType: getVisualJointCapType('TIMBER_FACE', broadFaceSol.taxonomy, broadFaceSol.materialPairKey),
+              playerFacingConnectionLabel: 'Timber Face Joint available',
+            };
+            const pSock: SnapSocket = {
+              id: broadFaceSol.sourceSocketId, pieceId: excludedPieceId || 'ghost',
+              localName: broadFaceSol.sourceSocketName, localPos: broadFaceSol.localAnchorA,
+              localNormal: Vec2.rotate(broadFaceSol.sourceFaceNormal, -preferredRot),
+              worldPos: broadFaceSol.worldContactPoint, normal: broadFaceSol.sourceFaceNormal,
+              type: 'edge', socketKind: type === 'wood_beam' ? 'beam_side' : 'block_edge', angle: preferredRot,
+            };
+            const tSock: SnapSocket = {
+              id: broadFaceSol.targetSocketId, pieceId: piece.id,
+              localName: broadFaceSol.targetSocketName, localPos: broadFaceSol.localAnchorB,
+              localNormal: Vec2.rotate(broadFaceSol.targetFaceNormal, -piece.rotation),
+              worldPos: broadFaceSol.worldContactPoint, normal: broadFaceSol.targetFaceNormal,
+              type: 'edge', socketKind: piece.type === 'wood_beam' ? 'beam_side' : 'block_edge', angle: piece.rotation,
+            };
+            const overlapBonus = Math.min(8, broadFaceSol.overlapLength / 8);
+            const effectiveScore = broadFaceSol.normalCorrectionPx - 6.75 - overlapBonus + (isOverlapFree ? 0 : 100);
+            candidates.push({
+              pSock, tSock, targetPiece: piece, alignedPos,
+              rawDist: broadFaceSol.normalCorrectionPx, effectiveScore,
+              compatLabel: type === 'wood_beam' ? 'BEAM_SIDE_TO_BLOCK_EDGE' : 'BLOCK_EDGE_TO_BEAM_SIDE',
+              humanLabel: 'Timber Face Joint', normalDot: -1,
+              isLocked: false, isOverlapFree, conflictingThirdPieceId,
+              timberJointProposal: proposal, clearanceClassification: isOverlapFree ? 'SOCKET_CONTACT_CLEARED' : 'THIRD_PIECE_CONFLICT',
+              partnerAdjustment: null, balancedActive: false, peakDiagnostics: null,
+              srcFeatureType: 'face', srcFeatureId: broadFaceSol.sourceFaceId,
+              tgtFeatureType: 'face', tgtFeatureId: broadFaceSol.targetFaceId,
+              seamSep: broadFaceSol.seamSeparation, cornerSupportedContact: false,
+              rankingBreakdown: {
+                candidateLabel: 'Timber Face Joint', targetPieceId: piece.id,
+                sourceFeatureId: broadFaceSol.sourceFaceId, targetFeatureId: broadFaceSol.targetFaceId,
+                validGeometry: true, noColliderPenetration: isOverlapFree, rotationPreserved: true,
+                pointerProximityPx: broadFaceSol.normalCorrectionPx,
+                totalPositionalCorrectionPx: broadFaceSol.normalCorrectionPx,
+                partnerMovementPx: 0, pointerDistanceScore: broadFaceSol.normalCorrectionPx,
+                angleCompatibilityScore: 2.5, specificityScore: 6.75,
+                hysteresisBonus: 0, supportCompletenessBonus: overlapBonus,
+                totalScore: effectiveScore, closureClassification: closure,
+                canonicalKey: canon.canonicalKey, mirroredEquivalentKey: canon.mirroredEquivalentKey,
+              },
+            });
+          }
+        }
+
         for (const tSock of targetSockets) {
           if (tSock.socketKind === 'center') continue;
 
           for (const pSock of candidatePieceSockets) {
             if (pSock.socketKind === 'center') continue;
+            if (
+              broadFaceHandledOnPiece &&
+              ((pSock.socketKind === 'beam_side' && tSock.socketKind === 'block_edge') ||
+                (pSock.socketKind === 'block_edge' && tSock.socketKind === 'beam_side'))
+            ) continue;
             const isTargetOblique = Math.abs(Math.sin(piece.rotation * 2)) > 0.25;
             const isBlockCornerToBlockCorner =
               pSock.socketKind === 'block_corner' && tSock.socketKind === 'block_corner';
@@ -3335,6 +3457,42 @@ export function findManualBindCandidatesForPiece(
 
     const otherSockets = getPieceSnapSockets(other);
     const otherCorners = getPieceCorners(other);
+
+    if ((piece.type === 'wood_beam') !== (other.type === 'wood_beam')) {
+      const broad = solveBroadFaceOverlap(
+        piece.type, piece.position, piece.rotation, other, piece.id,
+        { maxNormalDistancePx: MANUAL_BIND_TOLERANCE_PX, minOverlapPx: MIN_BROAD_FACE_OVERLAP_PX, inPlace: true, dragIsPrebuilt: Boolean(piece.isPrebuilt) },
+      );
+      if (broad?.valid) {
+        const key = `${other.id}:TIMBER_FACE:${broad.sourceFaceId}:${broad.targetFaceId}`;
+        const alreadyBound = activeJoints.some((j) => {
+          const partner = j.pieceAId === piece.id ? j.pieceBId : j.pieceAId;
+          return partner === other.id && j.jointType === 'TIMBER_FACE' && j.state !== 'BROKEN';
+        });
+        if (!alreadyBound && !seenKeys.has(key)) {
+          seenKeys.add(key);
+          candidates.push({
+            targetPieceId: other.id,
+            sourceSocketId: broad.sourceSocketId, targetSocketId: broad.targetSocketId,
+            sourceSocketName: broad.sourceSocketName, targetSocketName: broad.targetSocketName,
+            localAnchorA: broad.localAnchorA, localAnchorB: broad.localAnchorB,
+            worldPosition: broad.worldContactPoint, jointType: 'TIMBER_FACE',
+            restAngle: broad.restAngle, restSeparation: 0, seamSeparation: broad.seamSeparation,
+            strengthProfile: broad.strengthProfile, connectionTaxonomy: broad.taxonomy,
+            connectionSubtype: broad.connectionSubtype, materialA: piece.type, materialB: other.type,
+            materialPairKey: broad.materialPairKey, complianceProfile: broad.strengthProfile,
+            isPrebuiltBinding: Boolean(piece.isPrebuilt || other.isPrebuilt), creationReason: 'MANUAL_BIND_ACTION',
+            sourceFaceId: broad.sourceFaceId, targetFaceId: broad.targetFaceId,
+            sourceCornerId: null, targetCornerId: null,
+            sourceFeatureType: 'face', targetFeatureType: 'face',
+            sourceFaceNormal: broad.sourceFaceNormal, targetFaceNormal: broad.targetFaceNormal,
+            visualConnectionState: 'CANDIDATE_PREVIEW',
+            visualJointCapType: getVisualJointCapType('TIMBER_FACE', broad.taxonomy, broad.materialPairKey),
+            playerFacingConnectionLabel: 'Bind face binding',
+          });
+        }
+      }
+    }
 
     for (const mySock of mySockets) {
       if (mySock.socketKind === 'center' || mySock.socketKind === 'beam_corner') continue;

@@ -56,6 +56,7 @@ import {
   getOBBPenetrationDepth,
   getPieceCorners,
   getPieceCornersForTransform,
+  getPieceFacesForTransform,
   getPieceSnapSockets,
   normalizeAngleSigned,
   Vec2,
@@ -426,6 +427,168 @@ export function solveBlockCornerSeatFromBlockDrag(
     localAnchorBlock: stressFreeLocalBlock,
     worldContactPoint,
   };
+}
+
+export const MIN_BROAD_FACE_OVERLAP_PX = 0.25 * CONSTRUCTION_UNIT;
+
+export interface BroadFaceOverlapSolution {
+  valid: boolean;
+  alignedPos: Vector2;
+  sourceSocketId: string;
+  targetSocketId: string;
+  sourceSocketName: string;
+  targetSocketName: string;
+  sourceFaceId: PieceFaceId;
+  targetFaceId: PieceFaceId;
+  sourceFaceNormal: Vector2;
+  targetFaceNormal: Vector2;
+  localAnchorA: Vector2;
+  localAnchorB: Vector2;
+  worldContactPoint: Vector2;
+  overlapLength: number;
+  overlapStartWorld: Vector2;
+  overlapEndWorld: Vector2;
+  normalCorrectionPx: number;
+  seamSeparation: number;
+  restAngle: number;
+  jointType: 'TIMBER_FACE';
+  connectionSubtype: ConstructionBindingSubtype;
+  materialPairKey: MaterialPairProfileId;
+  strengthProfile: string;
+  taxonomy: 'TIMBER_FACE' | 'FACE_BINDING';
+  candidateLabel: 'Timber Face Joint';
+  friendlyMessage: string;
+}
+
+function broadFaceSocketName(type: MaterialType, faceId: PieceFaceId): string {
+  if (type === 'wood_beam') {
+    return faceId === 'TOP_FACE' ? 'SIDE_TOP_CENTER' : 'SIDE_BOTTOM_CENTER';
+  }
+  switch (faceId) {
+    case 'TOP_FACE': return 'TOP_EDGE';
+    case 'BOTTOM_FACE': return 'BOTTOM_EDGE';
+    case 'LEFT_FACE': return 'LEFT_EDGE';
+    case 'RIGHT_FACE': return 'RIGHT_EDGE';
+    default: return 'TOP_EDGE';
+  }
+}
+
+/** Continuous broad beam-to-block face solver. Corrects only along the face normal. */
+export function solveBroadFaceOverlap(
+  dragType: MaterialType,
+  dragRawPos: Vector2,
+  dragRot: number,
+  targetPiece: PlacedPiece,
+  dragPieceId = 'ghost',
+  options?: {
+    maxNormalDistancePx?: number;
+    minOverlapPx?: number;
+    inPlace?: boolean;
+    dragIsPrebuilt?: boolean;
+  },
+): BroadFaceOverlapSolution | null {
+  if ((dragType === 'wood_beam') === (targetPiece.type === 'wood_beam')) return null;
+  const dragCfg = PIECE_DEFINITIONS[dragType] ?? MATERIAL_CONFIGS[dragType];
+  const targetCfg = PIECE_DEFINITIONS[targetPiece.type] ?? MATERIAL_CONFIGS[targetPiece.type];
+  if (!dragCfg.jointCapable || !targetCfg.jointCapable) return null;
+
+  const maxNormalDistancePx = options?.maxNormalDistancePx ?? WORLD_CONFIG.snapDistance;
+  const minOverlapPx = options?.minOverlapPx ?? MIN_BROAD_FACE_OVERLAP_PX;
+  const inPlace = Boolean(options?.inPlace);
+  const dragIsPrebuilt = Boolean(options?.dragIsPrebuilt);
+  const dragFaces = getPieceFacesForTransform(dragType, dragRawPos, dragRot, dragPieceId).filter(
+    (f) => dragType === 'wood_beam'
+      ? f.id === 'TOP_FACE' || f.id === 'BOTTOM_FACE'
+      : f.id === 'TOP_FACE' || f.id === 'BOTTOM_FACE' || f.id === 'LEFT_FACE' || f.id === 'RIGHT_FACE',
+  );
+  const targetFaces = getPieceFacesForTransform(
+    targetPiece.type, targetPiece.position, targetPiece.rotation, targetPiece.id,
+  ).filter((f) => targetPiece.type === 'wood_beam'
+    ? f.id === 'TOP_FACE' || f.id === 'BOTTOM_FACE'
+    : f.id === 'TOP_FACE' || f.id === 'BOTTOM_FACE' || f.id === 'LEFT_FACE' || f.id === 'RIGHT_FACE');
+  const targetOBB = createOBB(targetPiece.position, targetCfg.colliderWidth, targetCfg.colliderHeight, targetPiece.rotation);
+  let best: (BroadFaceOverlapSolution & { score: number }) | null = null;
+
+  for (const dFace of dragFaces) for (const tFace of targetFaces) {
+    const normalDot = Vec2.dot(dFace.worldNormal, tFace.worldNormal);
+    if (normalDot > -0.96) continue;
+    const n = tFace.worldNormal;
+    if (Vec2.dot(Vec2.sub(dragRawPos, tFace.worldCenter), n) <= 2) continue;
+    const signedNormalDist = Vec2.dot(Vec2.sub(dFace.worldCenter, tFace.worldCenter), n);
+    const absNormalDist = Math.abs(signedNormalDist);
+    if (absNormalDist > maxNormalDistancePx) continue;
+
+    const alignedPos = inPlace
+      ? dragRawPos
+      : Vec2.add(dragRawPos, Vec2.scale(n, 0.02 - signedNormalDist));
+    const dragOBB = createOBB(alignedPos, dragCfg.colliderWidth, dragCfg.colliderHeight, dragRot);
+    if (getOBBPenetrationDepth(dragOBB, targetOBB, inPlace ? 2.5 : 0) > (inPlace ? 2.5 : 0.03)) continue;
+
+    const shift = Vec2.sub(alignedPos, dragRawPos);
+    const dStart = Vec2.add(dFace.worldStart, shift);
+    const dEnd = Vec2.add(dFace.worldEnd, shift);
+    const dCenter = Vec2.add(dFace.worldCenter, shift);
+    const t = tFace.worldTangent;
+    const project = (v: Vector2) => Vec2.dot(Vec2.sub(v, tFace.worldCenter), t);
+    const minA = Math.min(project(dStart), project(dEnd));
+    const maxA = Math.max(project(dStart), project(dEnd));
+    const minB = Math.min(project(tFace.worldStart), project(tFace.worldEnd));
+    const maxB = Math.max(project(tFace.worldStart), project(tFace.worldEnd));
+    const overlapMin = Math.max(minA, minB);
+    const overlapMax = Math.min(maxA, maxB);
+    const overlapLength = Number((overlapMax - overlapMin).toFixed(3));
+    if (overlapLength < minOverlapPx - 1e-4) continue;
+
+    const normalGap = Vec2.dot(Vec2.sub(dCenter, tFace.worldCenter), n);
+    const seamOrigin = Vec2.add(tFace.worldCenter, Vec2.scale(n, normalGap * 0.5));
+    const mid = (overlapMin + overlapMax) * 0.5;
+    const worldContactPoint = Vec2.add(seamOrigin, Vec2.scale(t, mid));
+    const localAnchorA = Vec2.rotate(Vec2.sub(worldContactPoint, alignedPos), -dragRot);
+    const localAnchorB = Vec2.rotate(Vec2.sub(worldContactPoint, targetPiece.position), -targetPiece.rotation);
+    const materialPairKey = resolveMaterialPairProfileId(
+      dragType, dragIsPrebuilt, targetPiece.type, Boolean(targetPiece.isPrebuilt), 'TIMBER_FACE',
+    );
+    const strengthProfile = resolveBindingStrengthProfile(
+      'TIMBER_FACE', dragType, targetPiece.type, dragIsPrebuilt, Boolean(targetPiece.isPrebuilt),
+    );
+    const involvesStone = isStoneMaterial(dragType) || isStoneMaterial(targetPiece.type);
+    const taxonomy: 'TIMBER_FACE' | 'FACE_BINDING' = involvesStone ? 'FACE_BINDING' : 'TIMBER_FACE';
+    const candidate: BroadFaceOverlapSolution & { score: number } = {
+      valid: true,
+      alignedPos,
+      sourceSocketId: `${dragPieceId}_${broadFaceSocketName(dragType, dFace.id)}`,
+      targetSocketId: `${targetPiece.id}_${broadFaceSocketName(targetPiece.type, tFace.id)}`,
+      sourceSocketName: broadFaceSocketName(dragType, dFace.id),
+      targetSocketName: broadFaceSocketName(targetPiece.type, tFace.id),
+      sourceFaceId: dFace.id,
+      targetFaceId: tFace.id,
+      sourceFaceNormal: dFace.worldNormal,
+      targetFaceNormal: tFace.worldNormal,
+      localAnchorA,
+      localAnchorB,
+      worldContactPoint,
+      overlapLength,
+      overlapStartWorld: Vec2.add(seamOrigin, Vec2.scale(t, overlapMin)),
+      overlapEndWorld: Vec2.add(seamOrigin, Vec2.scale(t, overlapMax)),
+      normalCorrectionPx: Number(Vec2.distance(dragRawPos, alignedPos).toFixed(3)),
+      seamSeparation: Number(Math.max(0, Math.abs(normalGap) - 0.025).toFixed(3)),
+      restAngle: normalizeAngleSigned(targetPiece.rotation - dragRot),
+      jointType: 'TIMBER_FACE',
+      connectionSubtype: resolveConnectionSubtype('TIMBER_FACE', dragType, targetPiece.type),
+      materialPairKey,
+      strengthProfile,
+      taxonomy,
+      candidateLabel: 'Timber Face Joint',
+      friendlyMessage: involvesStone
+        ? 'Timber Face Joint — flush beam-to-stone face binding ready.'
+        : 'Timber Face Joint — flush surface connection ready.',
+      score: absNormalDist - Math.min(8, overlapLength / 8),
+    };
+    if (!best || candidate.score < best.score) best = candidate;
+  }
+  if (!best) return null;
+  const { score: _score, ...solution } = best;
+  return solution;
 }
 
 export interface TimberLCornerSolution {
@@ -1614,7 +1777,9 @@ export function deriveStressFreeJointGeometryFromCommittedTransforms(
                 : joint.jointType === 'DIAGONAL_BRACE'
                   ? 'DIAGONAL_BRACE'
                   : joint.jointType === 'TIMBER_FACE' || joint.jointType === 'FACE_BINDING'
-                    ? 'TIMBER_FACE'
+                    ? isStoneMaterial(pieceA.type) || isStoneMaterial(pieceB.type)
+                      ? 'FACE_BINDING'
+                      : 'TIMBER_FACE'
                     : 'TIMBER_SPLICE',
     jointProfileId: joint.strengthProfile,
   });

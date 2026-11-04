@@ -39,6 +39,17 @@ export interface SimulatedPieceTransform {
   bullseyeExpired?: boolean;
 }
 
+interface FoundationAssistRecord {
+  pieceId: string;
+  restX: number;
+  restAngle: number;
+  breakDisplacementPx: number;
+  breakAngleRad: number;
+  breakImpulseThreshold: number;
+  state: 'INTACT' | 'BROKEN';
+  failureReason: string | null;
+}
+
 export interface DetailedPhysicsDiagnostics {
   logicalPieceCount: number;
   physicsBodyCount: number;
@@ -46,6 +57,8 @@ export interface DetailedPhysicsDiagnostics {
   activeTimberJointCount: number;
   strainedTimberJointCount: number;
   brokenTimberJointCount: number;
+  activeFoundationAssistCount: number;
+  brokenFoundationAssistCount: number;
   initialOverlapCount: number;
   maxInitialPenetration: number;
   initialKineticEnergy: number;
@@ -82,6 +95,7 @@ export class PhysicsBridge {
   private anchorConstraintMap: Map<string, Matter.Constraint> = new Map();
   private timberJoints: Map<string, TimberJoint> = new Map();
   private timberJointConstraintMap: Map<string, Matter.Constraint> = new Map();
+  private foundationAssists: Map<string, FoundationAssistRecord> = new Map();
   private brokenDuringGravityTestCount = 0;
   public lastBrokenTimberJointReason: string | null = null;
   private isRunning = false;
@@ -89,6 +103,8 @@ export class PhysicsBridge {
   private simTimeAccumulator = 0;
   private readonly SETTLE_DURATION = 0.8;
   private readonly KINETIC_SETTLE_THRESHOLD = 0.05;
+  private readonly QUIET_LINEAR_SPEED_THRESHOLD = 0.35;
+  private readonly QUIET_ANGULAR_SPEED_THRESHOLD = 0.025;
 
   // Phase 2 Attack & Damage Tracking
   private activeProjectileBody: Matter.Body | null = null;
@@ -146,6 +162,8 @@ export class PhysicsBridge {
       activeTimberJointCount: 0,
       strainedTimberJointCount: 0,
       brokenTimberJointCount: 0,
+      activeFoundationAssistCount: 0,
+      brokenFoundationAssistCount: 0,
       initialOverlapCount: 0,
       maxInitialPenetration: 0,
       initialKineticEnergy: 0,
@@ -267,6 +285,9 @@ export class PhysicsBridge {
           Composite.add(world, weldConstraint);
         }
       }
+
+
+      this.createFoundationAssistIfEligible(piece, body);
     }
 
     // 5B. Compliant, Breakable Timber Joint Constraints (1 constraint per active joint)
@@ -430,6 +451,80 @@ export class PhysicsBridge {
     }
 
     return false;
+  }
+
+  private createFoundationAssistIfEligible(
+    piece: PlacedPiece,
+    body: Matter.Body,
+  ): void {
+    if (
+      piece.isPrebuilt ||
+      piece.attachedAnchorId ||
+      piece.condition === 'BROKEN' ||
+      piece.condition === 'LOST' ||
+      (piece.type !== 'wood_block' &&
+        piece.type !== 'stone_block' &&
+        piece.type !== 'bullseye_block')
+    ) {
+      return;
+    }
+
+    const normalizedAngle = Math.atan2(Math.sin(piece.rotation), Math.cos(piece.rotation));
+    const cardinalAngleError = Math.min(
+      Math.abs(normalizedAngle),
+      Math.abs(Math.abs(normalizedAngle) - Math.PI),
+    );
+    const bottomGap = Math.abs(body.bounds.max.y - WORLD_CONFIG.groundY);
+    if (cardinalAngleError > (3 * Math.PI) / 180 || bottomGap > 2.5) {
+      return;
+    }
+
+    const isStone = piece.type === 'stone_block' || piece.type === 'bullseye_block';
+    const thresholds = DAMAGE_THRESHOLDS[piece.type];
+    this.foundationAssists.set(piece.id, {
+      pieceId: piece.id,
+      restX: piece.position.x,
+      restAngle: piece.rotation,
+      breakDisplacementPx: isStone ? 11 : 8,
+      breakAngleRad: isStone ? 0.24 : 0.18,
+      breakImpulseThreshold: thresholds.crackImpulse * (isStone ? 0.95 : 0.80),
+      state: 'INTACT',
+      failureReason: null,
+    });
+    this.syncFoundationAssistDiagnosticsCounts();
+  }
+
+  private breakFoundationAssist(pieceId: string, reason: string): void {
+    const assist = this.foundationAssists.get(pieceId);
+    if (!assist || assist.state === 'BROKEN') return;
+    assist.state = 'BROKEN';
+    assist.failureReason = reason;
+    const body = this.pieceBodyMap.get(pieceId);
+    if (body) Sleeping.set(body, false);
+    this.syncFoundationAssistDiagnosticsCounts();
+  }
+
+  private syncFoundationAssistDiagnosticsCounts(): void {
+    let active = 0;
+    let broken = 0;
+    for (const assist of this.foundationAssists.values()) {
+      if (assist.state === 'BROKEN') broken++;
+      else active++;
+    }
+    this.diagnostics.activeFoundationAssistCount = active;
+    this.diagnostics.brokenFoundationAssistCount = broken;
+  }
+
+  public getFoundationAssistDiagnostics(): Array<{
+    pieceId: string;
+    state: 'INTACT' | 'BROKEN';
+    failureReason: string | null;
+  }> {
+    return Array.from(this.foundationAssists.values()).map((assist) => ({
+      pieceId: assist.pieceId,
+      state: assist.state,
+      failureReason: assist.failureReason,
+    }));
   }
 
   private breakTimberJoint(jointId: string, reason: string): void {
@@ -915,6 +1010,15 @@ export class PhysicsBridge {
     const severity = Math.max(current.impactSeverity, Math.min(1.0, impulse / thresholds.breakImpulse));
     this.pieceConditions.set(pieceId, { condition: newCondition, impactSeverity: severity });
 
+    const foundationAssist = this.foundationAssists.get(pieceId);
+    if (foundationAssist?.state === 'INTACT') {
+      if (newCondition === 'BROKEN') {
+        this.breakFoundationAssist(pieceId, 'CONNECTED_PIECE_BROKEN');
+      } else if (impulse >= foundationAssist.breakImpulseThreshold) {
+        this.breakFoundationAssist(pieceId, 'DIRECT_IMPACT_IMPULSE');
+      }
+    }
+
     // Propagate impact shock to any active TimberJoint connected to this piece.
     // Note: Timber joints have lower break thresholds than wood_beam bodies, so a joint can
     // fracture cleanly while both connected beams remain INTACT or CRACKED.
@@ -1036,6 +1140,34 @@ export class PhysicsBridge {
     if (!this.isRunning) return;
 
     const fixedStep = 1000 / 60;
+
+    // Foundation assistance preserves ordinary grounded construction without adding
+    // constraints that compete with the bedrock collision. Vertical motion remains fully
+    // physical; only small horizontal and angular drift are filtered while the assist is intact.
+    for (const assist of this.foundationAssists.values()) {
+      if (assist.state === 'BROKEN') continue;
+      const body = this.pieceBodyMap.get(assist.pieceId);
+      if (!body) {
+        this.breakFoundationAssist(assist.pieceId, 'CONNECTED_PIECE_MISSING');
+        continue;
+      }
+
+      const horizontalError = body.position.x - assist.restX;
+      const angleError = shortestSignedAngleDelta(assist.restAngle, body.angle);
+      if (Math.abs(horizontalError) > assist.breakDisplacementPx) {
+        this.breakFoundationAssist(assist.pieceId, 'FOUNDATION_DISPLACEMENT_EXCEEDED');
+        continue;
+      }
+      if (Math.abs(angleError) > assist.breakAngleRad) {
+        this.breakFoundationAssist(assist.pieceId, 'FOUNDATION_ROTATION_EXCEEDED');
+        continue;
+      }
+
+      Body.setPosition(body, { x: assist.restX, y: body.position.y });
+      Body.setAngle(body, assist.restAngle);
+      Body.setVelocity(body, { x: 0, y: body.velocity.y });
+      Body.setAngularVelocity(body, 0);
+    }
 
     // 1. Pre-step: update rotated local anchor offsets & apply compliant angular spring-damper on active timber joints
     for (const [jointId, joint] of this.timberJoints.entries()) {
@@ -1292,6 +1424,7 @@ export class PhysicsBridge {
   public getStabilityReport(dtSec: number): StabilityReport {
     let totalKineticEnergy = 0;
     let maxVelocity = 0;
+    let maxAngularVelocity = 0;
     let fallenCount = 0;
     let awakeCount = 0;
     let sleepingCount = 0;
@@ -1348,6 +1481,7 @@ export class PhysicsBridge {
       if (speed > maxVelocity) maxVelocity = speed;
 
       const rotSpeed = Math.abs(body.angularVelocity);
+      if (rotSpeed > maxAngularVelocity) maxAngularVelocity = rotSpeed;
       const ke = 0.5 * body.mass * speedSq + 0.5 * body.inertia * (rotSpeed * rotSpeed);
       totalKineticEnergy += ke;
     }
@@ -1387,7 +1521,15 @@ export class PhysicsBridge {
     this.diagnostics.wispCosmeticOverlapCount = cosmetic;
     this.diagnostics.wispContactEvents = this.wispContactEvents;
 
-    if (totalKineticEnergy < this.KINETIC_SETTLE_THRESHOLD) {
+    const hasMeaningfulMotion =
+      maxVelocity > this.QUIET_LINEAR_SPEED_THRESHOLD ||
+      maxAngularVelocity > this.QUIET_ANGULAR_SPEED_THRESHOLD;
+    const structurallyInvalid = fallenCount > 0 || this.brokenDuringGravityTestCount > 0;
+    const isQuiet =
+      totalKineticEnergy < this.KINETIC_SETTLE_THRESHOLD ||
+      (!hasMeaningfulMotion && !structurallyInvalid);
+
+    if (isQuiet) {
       this.settledTimer += dtSec;
     } else {
       this.settledTimer = Math.max(0, this.settledTimer - dtSec * 1.5);
@@ -1470,6 +1612,7 @@ export class PhysicsBridge {
     this.anchorConstraintMap.clear();
     this.timberJoints.clear();
     this.timberJointConstraintMap.clear();
+    this.foundationAssists.clear();
     this.pieceConditions.clear();
     this.dispersedWispIds.clear();
     this.processedContacts.clear();

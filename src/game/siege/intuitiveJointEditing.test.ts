@@ -743,7 +743,7 @@ test('Test 14 (Scenario L): T-joint at beam center socket creates TIMBER_T_JOINT
   assert.strictEqual(snap.proposedTimberJoint?.strengthProfile, 'TIMBER_T_JOINT');
 });
 
-test('Test 15 (Scenario M): Supported contact on stone_block does not create a timber joint', () => {
+test('Test 15 (Scenario M): Snap-enabled broad beam contact on stone_block creates a breakable face binding', () => {
   const store = new LevelStore();
   const stone: PlacedPiece = {
     id: 'stone_support',
@@ -767,9 +767,11 @@ test('Test 15 (Scenario M): Supported contact on stone_block does not create a t
   );
 
   assert.strictEqual(snap.isValid, true);
-  assert.strictEqual(snap.connectionCategory, 'SUPPORTED_CONTACT');
-  assert.strictEqual(snap.connectionTaxonomy, 'SUPPORTED_CONTACT');
-  assert.strictEqual(snap.proposedTimberJoint, null, 'Stone block must never create a timber joint');
+  assert.strictEqual(snap.connectionCategory, 'TIMBER_JOINT');
+  assert.strictEqual(snap.connectionTaxonomy, 'FACE_BINDING');
+  assert.strictEqual(snap.proposedTimberJoint?.jointType, 'TIMBER_FACE');
+  assert.strictEqual(snap.proposedTimberJoint?.connectionSubtype, 'FACE_BINDING');
+  assert.strictEqual(snap.proposedTimberJoint?.materialPairKey, 'WOOD_STONE');
 });
 
 test('Test 16 (Scenario N): Snap OFF prevents automatic joint creation', () => {

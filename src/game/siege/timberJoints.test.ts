@@ -164,7 +164,7 @@ test('TimberJoints Test C: Angled Roof Peak Joint (e.g. 45° and -45° beams)', 
   assert.strictEqual(joints[0].state, 'INTACT');
 });
 
-test('TimberJoints Test D: Supported Contact remains distinct from a timber joint (Beam on Block, Block on Beam)', () => {
+test('TimberJoints Test D: Snap-enabled broad beam-on-block contact creates a timber face joint', () => {
   const store = new LevelStore();
   // Place wood block
   const block: PlacedPiece = {
@@ -194,10 +194,13 @@ test('TimberJoints Test D: Supported Contact remains distinct from a timber join
   assert.strictEqual(snapResult.isValid, true);
   assert.strictEqual(
     snapResult.connectionCategory,
-    'SUPPORTED_CONTACT',
-    'Beam on block must be SUPPORTED_CONTACT, not TIMBER_JOINT',
+    'TIMBER_JOINT',
+    'Snap-enabled broad beam contact should create a structural face joint',
   );
-  assert.strictEqual(snapResult.proposedTimberJoint, null, 'Must NOT propose a timber joint');
+  assert.strictEqual(snapResult.connectionTaxonomy, 'TIMBER_FACE');
+  assert.strictEqual(snapResult.proposedTimberJoint?.jointType, 'TIMBER_FACE');
+  assert.strictEqual(snapResult.proposedTimberJoint?.connectionSubtype, 'FACE_BINDING');
+  assert.strictEqual(snapResult.proposedTimberJoint?.materialPairKey, 'WOOD_WOOD');
 
   const beam: PlacedPiece = {
     id: 'test_beam_supported',
@@ -208,7 +211,8 @@ test('TimberJoints Test D: Supported Contact remains distinct from a timber join
   };
   store.placePiece(beam, false, snapResult.proposedTimberJoint);
 
-  assert.strictEqual(store.getJoints().length, 0, 'No timber joint created for supported contact');
+  assert.strictEqual(store.getJoints().length, 1, 'One broad-face timber joint should be committed');
+  assert.strictEqual(store.getJoints()[0].jointType, 'TIMBER_FACE');
 });
 
 test('TimberJoints Test E: Disabling Snap prevents timber joint creation', () => {
