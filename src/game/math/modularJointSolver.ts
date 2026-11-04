@@ -28,6 +28,7 @@ import {
   CanonicalRelationshipDescription,
   ClosureClassification,
   ConnectionTaxonomyCategory,
+  ConstructionBindingSubtype,
   EnvironmentalAnchor,
   MaterialPairProfileId,
   MaterialType,
@@ -58,6 +59,7 @@ import {
   getPieceCornersForTransform,
   getPieceFacesForTransform,
   getPieceSnapSockets,
+  getPieceSnapSocketsForTransform,
   normalizeAngleSigned,
   Vec2,
 } from './geometry';
@@ -427,6 +429,193 @@ export function solveBlockCornerSeatFromBlockDrag(
     localAnchorBlock: stressFreeLocalBlock,
     worldContactPoint,
   };
+}
+
+export const ENDPOINT_FACE_CORNER_BAND_PX = 6;
+
+export interface ContinuousEndpointFaceSeatSolution {
+  valid: boolean;
+  alignedPos: Vector2;
+  sourceSocketId: string;
+  targetSocketId: string;
+  sourceSocketName: string;
+  targetSocketName: string;
+  sourceFaceId: PieceFaceId;
+  targetFaceId: PieceFaceId;
+  sourceFaceNormal: Vector2;
+  targetFaceNormal: Vector2;
+  localAnchorA: Vector2;
+  localAnchorB: Vector2;
+  worldContactPoint: Vector2;
+  normalCorrectionPx: number;
+  seamSeparation: number;
+  restAngle: number;
+  jointType: 'TIMBER_FACE';
+  connectionSubtype: ConstructionBindingSubtype;
+  materialPairKey: MaterialPairProfileId;
+  strengthProfile: string;
+  taxonomy: 'TIMBER_FACE' | 'FACE_BINDING';
+  distanceFromNearestCornerPx: number;
+}
+
+function endpointFaceSocketName(type: MaterialType, faceId: PieceFaceId): string {
+  if (type === 'wood_beam') {
+    return faceId === 'END_A_FACE' ? 'END_A_CENTER' : 'END_B_CENTER';
+  }
+  switch (faceId) {
+    case 'TOP_FACE': return 'TOP_EDGE';
+    case 'BOTTOM_FACE': return 'BOTTOM_EDGE';
+    case 'LEFT_FACE': return 'LEFT_EDGE';
+    case 'RIGHT_FACE': return 'RIGHT_EDGE';
+    default: return 'TOP_EDGE';
+  }
+}
+
+function beamEndFaceId(socket: SnapSocket): PieceFaceId {
+  return (socket.localName || '').includes('END_A') ? 'END_A_FACE' : 'END_B_FACE';
+}
+
+/**
+ * Continuous endpoint-to-face seating. A real corner band remains owned by the
+ * existing corner-seat solver; face-interior placement preserves tangent position.
+ */
+export function solveContinuousEndpointFaceSeat(
+  dragType: MaterialType,
+  dragRawPos: Vector2,
+  dragRot: number,
+  targetPiece: PlacedPiece,
+  dragPieceId = 'ghost',
+  options?: {
+    maxNormalDistancePx?: number;
+    cornerBandPx?: number;
+    inPlace?: boolean;
+    dragIsPrebuilt?: boolean;
+  },
+): ContinuousEndpointFaceSeatSolution | null {
+  if ((dragType === 'wood_beam') === (targetPiece.type === 'wood_beam')) return null;
+  const maxDistance = options?.maxNormalDistancePx ?? WORLD_CONFIG.snapDistance;
+  const cornerBand = options?.cornerBandPx ?? ENDPOINT_FACE_CORNER_BAND_PX;
+  const inPlace = Boolean(options?.inPlace);
+  const dragIsPrebuilt = Boolean(options?.dragIsPrebuilt);
+  const dragCfg = PIECE_DEFINITIONS[dragType] ?? MATERIAL_CONFIGS[dragType];
+  const targetCfg = PIECE_DEFINITIONS[targetPiece.type] ?? MATERIAL_CONFIGS[targetPiece.type];
+  let best: (ContinuousEndpointFaceSeatSolution & { score: number }) | null = null;
+
+  if (dragType === 'wood_beam') {
+    const endSockets = getPieceSnapSocketsForTransform(
+      dragType, dragRawPos, dragRot, dragPieceId,
+    ).filter((socket) => socket.socketKind === 'beam_end');
+    const blockFaces = getPieceFacesForTransform(
+      targetPiece.type, targetPiece.position, targetPiece.rotation, targetPiece.id,
+    ).filter((face) => face.jointCapable);
+    const targetOBB = createOBB(targetPiece.position, targetCfg.colliderWidth, targetCfg.colliderHeight, targetPiece.rotation);
+
+    for (const end of endSockets) for (const face of blockFaces) {
+      if (Vec2.dot(end.normal, face.worldNormal) > -0.85) continue;
+      const relative = Vec2.sub(end.worldPos, face.worldCenter);
+      const normalDistance = Vec2.dot(relative, face.worldNormal);
+      if (normalDistance < -0.5 || normalDistance > maxDistance) continue;
+      const tangentCoordinate = Vec2.dot(relative, face.worldTangent);
+      const halfLength = face.length / 2;
+      if (Math.abs(tangentCoordinate) > halfLength + 1e-4) continue;
+      const cornerDistance = halfLength - Math.abs(tangentCoordinate);
+      if (cornerDistance <= cornerBand) continue;
+
+      const shift = inPlace ? { x: 0, y: 0 } : Vec2.scale(face.worldNormal, 0.02 - normalDistance);
+      const alignedPos = Vec2.add(dragRawPos, shift);
+      const contact = Vec2.add(end.worldPos, shift);
+      const dragOBB = createOBB(alignedPos, dragCfg.colliderWidth, dragCfg.colliderHeight, dragRot);
+      if (getOBBPenetrationDepth(dragOBB, targetOBB, inPlace ? 2.5 : 0) > (inPlace ? 2.5 : 0.03)) continue;
+      const localA = Vec2.rotate(Vec2.sub(contact, alignedPos), -dragRot);
+      const localB = Vec2.rotate(Vec2.sub(contact, targetPiece.position), -targetPiece.rotation);
+      const pair = resolveMaterialPairProfileId(
+        dragType, dragIsPrebuilt, targetPiece.type, Boolean(targetPiece.isPrebuilt), 'TIMBER_FACE',
+      );
+      const taxonomy: 'TIMBER_FACE' | 'FACE_BINDING' =
+        isStoneMaterial(dragType) || isStoneMaterial(targetPiece.type) ? 'FACE_BINDING' : 'TIMBER_FACE';
+      const candidate: ContinuousEndpointFaceSeatSolution & { score: number } = {
+        valid: true, alignedPos,
+        sourceSocketId: end.id,
+        targetSocketId: `${targetPiece.id}_${endpointFaceSocketName(targetPiece.type, face.id)}`,
+        sourceSocketName: end.localName || end.id,
+        targetSocketName: endpointFaceSocketName(targetPiece.type, face.id),
+        sourceFaceId: beamEndFaceId(end), targetFaceId: face.id,
+        sourceFaceNormal: end.normal, targetFaceNormal: face.worldNormal,
+        localAnchorA: localA, localAnchorB: localB, worldContactPoint: contact,
+        normalCorrectionPx: Number(Vec2.distance(dragRawPos, alignedPos).toFixed(3)),
+        seamSeparation: 0,
+        restAngle: normalizeAngleSigned(targetPiece.rotation - dragRot),
+        jointType: 'TIMBER_FACE',
+        connectionSubtype: resolveConnectionSubtype('TIMBER_FACE', dragType, targetPiece.type),
+        materialPairKey: pair,
+        strengthProfile: resolveBindingStrengthProfile(
+          'TIMBER_FACE', dragType, targetPiece.type, dragIsPrebuilt, Boolean(targetPiece.isPrebuilt),
+        ),
+        taxonomy,
+        distanceFromNearestCornerPx: Number(cornerDistance.toFixed(3)),
+        score: normalDistance,
+      };
+      if (!best || candidate.score < best.score) best = candidate;
+    }
+  } else if (targetPiece.type === 'wood_beam') {
+    const beamEnds = getPieceSnapSockets(targetPiece).filter((socket) => socket.socketKind === 'beam_end');
+    const blockFaces = getPieceFacesForTransform(dragType, dragRawPos, dragRot, dragPieceId).filter(
+      (face) => face.jointCapable,
+    );
+    const beamOBB = createOBB(targetPiece.position, targetCfg.colliderWidth, targetCfg.colliderHeight, targetPiece.rotation);
+
+    for (const face of blockFaces) for (const end of beamEnds) {
+      if (Vec2.dot(face.worldNormal, end.normal) > -0.85) continue;
+      const relative = Vec2.sub(end.worldPos, face.worldCenter);
+      const normalDistance = Vec2.dot(relative, face.worldNormal);
+      if (normalDistance < -0.5 || normalDistance > maxDistance) continue;
+      const tangentCoordinate = Vec2.dot(relative, face.worldTangent);
+      const halfLength = face.length / 2;
+      if (Math.abs(tangentCoordinate) > halfLength + 1e-4) continue;
+      const cornerDistance = halfLength - Math.abs(tangentCoordinate);
+      if (cornerDistance <= cornerBand) continue;
+
+      const shift = inPlace ? { x: 0, y: 0 } : Vec2.scale(face.worldNormal, normalDistance - 0.02);
+      const alignedPos = Vec2.add(dragRawPos, shift);
+      const contact = end.worldPos;
+      const dragOBB = createOBB(alignedPos, dragCfg.colliderWidth, dragCfg.colliderHeight, dragRot);
+      if (getOBBPenetrationDepth(dragOBB, beamOBB, inPlace ? 2.5 : 0) > (inPlace ? 2.5 : 0.03)) continue;
+      const localA = Vec2.rotate(Vec2.sub(contact, alignedPos), -dragRot);
+      const localB = Vec2.rotate(Vec2.sub(contact, targetPiece.position), -targetPiece.rotation);
+      const pair = resolveMaterialPairProfileId(
+        dragType, dragIsPrebuilt, targetPiece.type, Boolean(targetPiece.isPrebuilt), 'TIMBER_FACE',
+      );
+      const taxonomy: 'TIMBER_FACE' | 'FACE_BINDING' =
+        isStoneMaterial(dragType) || isStoneMaterial(targetPiece.type) ? 'FACE_BINDING' : 'TIMBER_FACE';
+      const candidate: ContinuousEndpointFaceSeatSolution & { score: number } = {
+        valid: true, alignedPos,
+        sourceSocketId: `${dragPieceId}_${endpointFaceSocketName(dragType, face.id)}`,
+        targetSocketId: end.id,
+        sourceSocketName: endpointFaceSocketName(dragType, face.id),
+        targetSocketName: end.localName || end.id,
+        sourceFaceId: face.id, targetFaceId: beamEndFaceId(end),
+        sourceFaceNormal: face.worldNormal, targetFaceNormal: end.normal,
+        localAnchorA: localA, localAnchorB: localB, worldContactPoint: contact,
+        normalCorrectionPx: Number(Vec2.distance(dragRawPos, alignedPos).toFixed(3)),
+        seamSeparation: 0,
+        restAngle: normalizeAngleSigned(targetPiece.rotation - dragRot),
+        jointType: 'TIMBER_FACE',
+        connectionSubtype: resolveConnectionSubtype('TIMBER_FACE', dragType, targetPiece.type),
+        materialPairKey: pair,
+        strengthProfile: resolveBindingStrengthProfile(
+          'TIMBER_FACE', dragType, targetPiece.type, dragIsPrebuilt, Boolean(targetPiece.isPrebuilt),
+        ),
+        taxonomy,
+        distanceFromNearestCornerPx: Number(cornerDistance.toFixed(3)),
+        score: normalDistance,
+      };
+      if (!best || candidate.score < best.score) best = candidate;
+    }
+  }
+
+  if (!best) return null;
+  const { score: _score, ...solution } = best;
+  return solution;
 }
 
 export const MIN_BROAD_FACE_OVERLAP_PX = 0.25 * CONSTRUCTION_UNIT;
