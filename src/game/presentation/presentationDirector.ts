@@ -26,6 +26,11 @@ import {
   WispReactionState,
 } from './presentationTypes';
 
+import {
+  advanceConstructionTransformationState,
+  deriveConstructionTransformationState,
+} from './constructionTransformation';
+import type { ConstructionTransformationPresentationState } from './constructionTransformation';
 const PRESENTATION_SETTINGS_STORAGE_KEY = 'alchemical_fortress_phase4_presentation_v1';
 
 const WISP_PERSONALITIES: Record<string, { isHero: boolean; tendency: WispPersonalityTendency }> = {
@@ -98,6 +103,11 @@ export class PresentationDirector {
   private lastEvent: PresentationEventType | null = null;
   private trackedAttackIndex = -1;
   private trackedPhase = '';
+  private constructionTransformationState: ConstructionTransformationPresentationState = {
+    mode: 'PROTOTYPE',
+    transformationProgress: 0,
+    isAcceptedRevision: false,
+  };
 
   // Safe Read-Only Visual Replay
   public replayFrames: ReplayKeyframe[] = [];
@@ -121,6 +131,42 @@ export class PresentationDirector {
   constructor() {
     this.settings = this.loadSettings();
     this.syncAudioSettings();
+  }
+
+  /** Read-only presentation state for transformed construction rendering. */
+  public getConstructionTransformationState(): Readonly<ConstructionTransformationPresentationState> {
+    return this.constructionTransformationState;
+  }
+
+  /** Reconstructs an accepted hydrated session without replaying the reveal. */
+  public initializeConstructionTransformation(
+    phase: string,
+    acceptedRevisionId: number | null,
+    currentConstructionRevision: number,
+  ): void {
+    this.constructionTransformationState = deriveConstructionTransformationState({
+      phase,
+      acceptedRevisionId,
+      currentConstructionRevision,
+      reducedMotion: this.settings.reducedMotion,
+    });
+  }
+
+  /** Advances the cosmetic reveal from read-only gameplay inputs. */
+  public updateConstructionTransformation(
+    dt: number,
+    phase: string,
+    acceptedRevisionId: number | null,
+    currentConstructionRevision: number,
+  ): void {
+    this.constructionTransformationState = advanceConstructionTransformationState({
+      phase,
+      acceptedRevisionId,
+      currentConstructionRevision,
+      currentState: this.constructionTransformationState,
+      deltaSec: dt,
+      reducedMotion: this.settings.reducedMotion,
+    });
   }
 
   private loadSettings(): PresentationSettings {

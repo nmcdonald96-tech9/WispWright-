@@ -328,6 +328,12 @@ export class CanvasRenderer {
     const activeBridge = this.getActivePhysicsBridge();
 
     // 1. Update PresentationDirector (Read-only observation of gameplay state)
+    this.presentationDirector.updateConstructionTransformation(
+      dt,
+      effectiveMode,
+      this.store.acceptedRevisionId,
+      this.store.currentConstructionRevision,
+    );
     this.presentationDirector.update(
       dt,
       this.timeSec,
