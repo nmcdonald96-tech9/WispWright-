@@ -5,6 +5,10 @@
 
 import { MATERIAL_CONFIGS } from '../config';
 import { MaterialType, PieceCondition, Vector2 } from '../types';
+import {
+  deriveConstructionDamageVisualProfile,
+  deriveConstructionMaterialLightingProfile,
+} from '../presentation/constructionTransformation';
 import type { PieceVisualDescriptor } from '../presentation/constructionTransformation';
 
 export interface TransformedPieceDecorationStyle {
@@ -33,6 +37,172 @@ export function getTransformedPieceDecorationStyle(
     variant: descriptor?.variantStyle ?? 0,
     prebuiltRune: Boolean(isPrebuilt && type === 'stone_block' && alpha > 0),
   };
+}
+
+export interface TransformedMaterialLightingRenderStyle {
+  family: 'WOOD_BEAM_MATERIAL' | 'WOOD_BLOCK_MATERIAL' | 'STONE_MATERIAL';
+  alpha: number;
+  bevelWidthPx: number;
+  grainPathCount: number;
+  knotCount: number;
+  topHighlightAlpha: number;
+  lowerEdgeShadowAlpha: number;
+  hardwareShadowOffset: { x: number; y: number };
+  hardwareHighlightAlpha: number;
+  contactShadowAlpha: number;
+  recessShadowAlpha: number;
+  runeGlowAlpha: number;
+  runeGrooveAlpha: number;
+  crackAlpha: number;
+  exposedMaterialAlpha: number;
+  sideFaceDamageAlpha: number;
+  chipCount: number;
+}
+
+export function getTransformedMaterialLightingRenderStyle(
+  descriptor: PieceVisualDescriptor,
+  isPrebuilt: boolean,
+  reducedIntensity = false,
+): TransformedMaterialLightingRenderStyle {
+  const material = deriveConstructionMaterialLightingProfile({
+    descriptor,
+    isPrebuilt,
+    reducedIntensity,
+  });
+  const damage = deriveConstructionDamageVisualProfile(descriptor);
+  return {
+    family: material.family,
+    alpha: material.alpha,
+    bevelWidthPx: material.bevelWidthPx,
+    grainPathCount: material.grainPathCount,
+    knotCount: material.knotCount,
+    topHighlightAlpha: material.topHighlightAlpha,
+    lowerEdgeShadowAlpha: material.lowerEdgeShadowAlpha,
+    hardwareShadowOffset: material.hardwareShadowOffset,
+    hardwareHighlightAlpha: material.hardwareHighlightAlpha,
+    contactShadowAlpha: material.contactShadowAlpha,
+    recessShadowAlpha: material.recessShadowAlpha,
+    runeGlowAlpha: material.runeGlowAlpha,
+    runeGrooveAlpha: material.runeGrooveAlpha,
+    crackAlpha: damage.crackAlpha,
+    exposedMaterialAlpha: damage.exposedMaterialAlpha,
+    sideFaceDamageAlpha: damage.sideFaceDamageAlpha,
+    chipCount: damage.chipCount,
+  };
+}
+
+function renderMaterialLightingPass(
+  ctx: CanvasRenderingContext2D,
+  descriptor: PieceVisualDescriptor,
+  isPrebuilt: boolean,
+  hw: number,
+  hh: number,
+): void {
+  const style = getTransformedMaterialLightingRenderStyle(descriptor, isPrebuilt);
+  if (style.alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= style.alpha;
+
+  // Upper-left key-light bevel and lower-right form shadow.
+  ctx.strokeStyle = `rgba(255, 247, 237, ${style.topHighlightAlpha})`;
+  ctx.lineWidth = Math.max(0.8, style.bevelWidthPx * 0.55);
+  ctx.beginPath();
+  ctx.moveTo(-hw + 2, -hh + 2);
+  ctx.lineTo(hw - 3, -hh + 2);
+  ctx.moveTo(-hw + 2, -hh + 2);
+  ctx.lineTo(-hw + 2, hh - 3);
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(15, 23, 42, ${style.lowerEdgeShadowAlpha})`;
+  ctx.lineWidth = Math.max(1, style.bevelWidthPx * 0.65);
+  ctx.beginPath();
+  ctx.moveTo(-hw + 3, hh - 2);
+  ctx.lineTo(hw - 2, hh - 2);
+  ctx.moveTo(hw - 2, -hh + 3);
+  ctx.lineTo(hw - 2, hh - 2);
+  ctx.stroke();
+
+  if (style.family === 'WOOD_BEAM_MATERIAL' || style.family === 'WOOD_BLOCK_MATERIAL') {
+    // Deterministic layered grain. No runtime randomness or allocation-heavy paths.
+    ctx.strokeStyle = 'rgba(67, 38, 18, 0.46)';
+    ctx.lineWidth = 0.75;
+    for (let index = 0; index < style.grainPathCount; index++) {
+      const y = -hh * 0.45 + ((index + 1) / (style.grainPathCount + 1)) * hh * 0.9;
+      const phase = ((descriptor.seed >>> (index * 3)) & 7) - 3.5;
+      ctx.beginPath();
+      ctx.moveTo(-hw + 10, y);
+      ctx.bezierCurveTo(-hw * 0.35, y + phase * 0.35, hw * 0.35, y - phase * 0.3, hw - 10, y);
+      ctx.stroke();
+    }
+    if (style.knotCount > 0) {
+      const knotX = -hw * 0.2 + (descriptor.seed % 41) / 40 * hw * 0.4;
+      ctx.strokeStyle = 'rgba(54, 31, 15, 0.62)';
+      ctx.beginPath();
+      ctx.ellipse(knotX, 0, 4.2, 2.4, 0.25, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Recessed ember channel with restrained local spill.
+    ctx.shadowColor = `rgba(251, 146, 60, ${Math.min(0.36, style.hardwareHighlightAlpha * 0.55)})`;
+    ctx.shadowBlur = 3.5;
+    ctx.strokeStyle = `rgba(251, 146, 60, ${style.hardwareHighlightAlpha * 0.72})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-hw * 0.32, 0);
+    ctx.lineTo(hw * 0.32, 0);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  } else {
+    // Stone mortar recess and deterministic mineral mark.
+    ctx.strokeStyle = `rgba(15, 23, 42, ${style.recessShadowAlpha})`;
+    ctx.lineWidth = 1.25;
+    const course = descriptor.variantStyle % 2 === 0 ? 0 : -hh * 0.16;
+    ctx.beginPath();
+    ctx.moveTo(-hw + 4, course);
+    ctx.lineTo(hw - 4, course);
+    ctx.moveTo(-hw * 0.42, course);
+    ctx.lineTo(-hw * 0.42, hh - 4);
+    ctx.moveTo(hw * 0.42, -hh + 4);
+    ctx.lineTo(hw * 0.42, course);
+    ctx.stroke();
+    if (isPrebuilt && style.runeGrooveAlpha > 0) {
+      ctx.strokeStyle = `rgba(8, 47, 73, ${style.runeGrooveAlpha})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, -8);
+      ctx.lineTo(6, 0);
+      ctx.lineTo(0, 8);
+      ctx.lineTo(-6, 0);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.shadowColor = `rgba(34, 211, 238, ${style.runeGlowAlpha})`;
+      ctx.shadowBlur = 4;
+      ctx.strokeStyle = `rgba(103, 232, 249, ${Math.min(0.9, style.runeGrooveAlpha)})`;
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // Existing damage authority drives only presentation across front and side edges.
+  if (style.crackAlpha > 0) {
+    const exposed = style.family === 'STONE_MATERIAL' ? '148, 163, 184' : '254, 215, 170';
+    ctx.strokeStyle = `rgba(9, 13, 22, ${style.crackAlpha})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-hw * 0.28, -hh);
+    ctx.lineTo(-hw * 0.08, -hh * 0.12);
+    ctx.lineTo(hw * 0.14, hh * 0.38);
+    ctx.lineTo(hw - 1, hh * 0.54);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(${exposed}, ${style.exposedMaterialAlpha * 0.75})`;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(-hw * 0.25, -hh);
+    ctx.lineTo(-hw * 0.05, -hh * 0.12);
+    ctx.lineTo(hw * 0.17, hh * 0.38);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function renderTransformedPieceDetails(
@@ -461,6 +631,7 @@ export function renderPiece(
 
   if (visualDescriptor && visualDescriptor.transformationProgress > 0) {
     renderTransformedPieceDetails(ctx, visualDescriptor, isPrebuilt, hw, hh);
+    renderMaterialLightingPass(ctx, visualDescriptor, isPrebuilt, hw, hh);
   }
   // Expressive Structural Damage & Cracking Overlay (No CRK text in Player Presentation Mode)
   if (condition === 'CRACKED') {
