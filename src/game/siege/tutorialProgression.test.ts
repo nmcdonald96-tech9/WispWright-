@@ -58,14 +58,14 @@ function runFullTwoWaveSiege(siege: SiegeController, onReinforcement?: () => voi
   siege.skipIntroduction();
   siege.step(0.016);
   siege.step(1.3);
-  for (let i = 0; i < 600; i++) {
+  // Allow final settlement, anticipation, celebration, and completion.
+  for (let i = 0; i < 1800; i++) {
     siege.step(0.016);
-    if (siege.mode === 'ATTACK_RESOLVED') {
-      siege.nextAttackManually();
+    if (siege.mode === 'SEQUENCE_COMPLETE' || siege.mode === 'RESULTS') {
       break;
     }
-    if (siege.mode === 'SEQUENCE_COMPLETE' || siege.mode === 'RESULTS') break;
   }
+
   assert(
     siege.mode === 'SEQUENCE_COMPLETE' || siege.mode === 'RESULTS',
     `Expected SEQUENCE_COMPLETE after Wave 2, got ${siege.mode}`,

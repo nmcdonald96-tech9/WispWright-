@@ -1292,7 +1292,12 @@ export class PresentationDirector {
       ) {
         state = 'REINFORCEMENT_HOPE';
       } else if (
-        effectiveMode === 'SEQUENCE_COMPLETE' ||
+   effectiveMode === 'ATTACK_RESOLVED' &&
+   siege.finalWispCelebration.phase === 'CELEBRATING'
+ ) {
+   state = 'CELEBRATION_CHORUS';
+ } else if (
+   effectiveMode === 'SEQUENCE_COMPLETE' ||
         effectiveMode === 'RESULTS' ||
         effectiveMode === 'UNLOCK_PRESENTATION'
       ) {

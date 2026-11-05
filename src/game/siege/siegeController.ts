@@ -34,6 +34,12 @@ import {
   type PostImpactResolutionState,
 } from './postImpactResolution';
 import {
+  advanceFinalWispCelebration,
+  createFinalWispCelebrationState,
+  startFinalWispCelebration,
+  type FinalWispCelebrationState,
+} from './finalWispCelebration';
+import {
   selectTargetAndTrajectory,
   TargetCandidate,
   TargetingDiagnostics,
@@ -79,6 +85,8 @@ export class SiegeController {
   public settlingTimer = 0;
   public postImpactResolution: PostImpactResolutionState =
     createPostImpactResolutionState();
+  public finalWispCelebration: FinalWispCelebrationState =
+    createFinalWispCelebrationState();
   public intermissionTimer = 0;
   public emergencyStopUsed = false;
   public overlapWarning: string | null = null;
@@ -542,6 +550,7 @@ export class SiegeController {
       spawnPosition: { x: presetCfg.launcherX, y: presetCfg.launcherY },
     };
     this.outcomes = [];
+    this.finalWispCelebration = createFinalWispCelebrationState();
     this.siegeSummary = null;
     this.level1Results = null;
     this.emergencyStopUsed = false;
@@ -1004,7 +1013,16 @@ export class SiegeController {
 
       case 'ATTACK_RESOLVED': {
         this.intermissionTimer += dt;
-        if (this.intermissionTimer >= 2.0) {
+        const isFinalAttack = this.currentAttackIndex === AUTHORED_ATTACKS.length - 1;
+        if (isFinalAttack && this.finalWispCelebration.phase !== 'INACTIVE') {
+          this.finalWispCelebration = advanceFinalWispCelebration(
+            this.finalWispCelebration,
+            dt,
+          );
+          if (this.finalWispCelebration.phase === 'COMPLETE') {
+            this.advanceToNextAttackOrFinish();
+          }
+        } else if (this.intermissionTimer >= 2.0) {
           if (this.currentAttackIndex === 0 && this.autoEnterReinforcement) {
             this.enterReinforcementPhase();
           } else {
@@ -1153,6 +1171,10 @@ export class SiegeController {
     }
 
     this.intermissionTimer = 0;
+    const isFinalAttack = this.currentAttackIndex === AUTHORED_ATTACKS.length - 1;
+    this.finalWispCelebration = isFinalAttack
+      ? startFinalWispCelebration(stableNow, state.wisps.length)
+      : createFinalWispCelebrationState();
     this.mode = 'ATTACK_RESOLVED';
     this.store.setSavedPhase('ATTACK_RESOLVED');
     this.onStateChange?.();
@@ -1442,6 +1464,7 @@ export class SiegeController {
     this.currentAttack = null;
     this.currentAttackIndex = 0;
     this.outcomes = [];
+    this.finalWispCelebration = createFinalWispCelebrationState();
     this.siegeSummary = null;
     this.level1Results = null;
     this.currentTarget = null;
@@ -1468,6 +1491,7 @@ export class SiegeController {
     this.currentAttack = null;
     this.currentAttackIndex = 0;
     this.outcomes = [];
+    this.finalWispCelebration = createFinalWispCelebrationState();
     this.siegeSummary = null;
     this.level1Results = null;
     this.currentTarget = null;
