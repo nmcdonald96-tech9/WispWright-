@@ -233,6 +233,10 @@ export interface WispPresentationData {
   dispersalProgress: number; // 0 to 1
   lookTarget: Vector2 | null;
   blinkPhase: number;
+  celebrationElapsedSec?: number;
+  celebrationSurvivorIndex?: number;
+  celebrationSurvivorCount?: number;
+  celebrationTotalWispCount?: number;
 }
 
 export interface CosmeticParticle {

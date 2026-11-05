@@ -1196,6 +1196,13 @@ export class PresentationDirector {
   ): void {
     const activeProj = activeBridge?.getActiveProjectile();
     const awakeBodies = activeBridge?.diagnostics.awakeBodyCount ?? 0;
+    const survivingWisps = wisps.filter((wisp) => !wisp.isDispersed);
+    const survivorIndexById = new Map(
+      survivingWisps.map((wisp, index) => [wisp.id, index]),
+    );
+    const celebrationIsActive =
+      effectiveMode === 'ATTACK_RESOLVED' &&
+      siege.finalWispCelebration.phase === 'CELEBRATING';
 
     for (let i = 0; i < wisps.length; i++) {
       const wisp = wisps[i];
@@ -1331,6 +1338,7 @@ export class PresentationDirector {
       }
 
       const blinkPhase = Math.sin(timeSec * 3.5 + i * 2.1) > 0.96 ? 1 : 0;
+      const celebrationSurvivorIndex = survivorIndexById.get(wisp.id);
 
       this.wispStates.set(wisp.id, {
         wispId: wisp.id,
@@ -1340,6 +1348,16 @@ export class PresentationDirector {
         dispersalProgress: 0,
         lookTarget,
         blinkPhase,
+        celebrationElapsedSec:
+          celebrationIsActive && celebrationSurvivorIndex !== undefined
+            ? siege.finalWispCelebration.elapsedSec
+            : undefined,
+        celebrationSurvivorIndex:
+          celebrationIsActive ? celebrationSurvivorIndex : undefined,
+        celebrationSurvivorCount:
+          celebrationIsActive ? survivingWisps.length : undefined,
+        celebrationTotalWispCount:
+          celebrationIsActive ? wisps.length : undefined,
       });
     }
 

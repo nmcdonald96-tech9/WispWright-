@@ -4,6 +4,7 @@
  */
 
 import { WispPresentationData, WispReactionState } from '../presentation/presentationTypes';
+import { deriveWispCelebrationPose } from '../presentation/wispCelebrationChoreography';
 import { Vector2, WispEntity } from '../types';
 
 export function renderWisps(
@@ -46,9 +47,33 @@ export function renderWisps(
     let bobY = Math.sin(animTime * cadenceSpeed + phaseOffset) * (isHero ? 5.5 : 4.2);
     let swayX = Math.cos(animTime * (cadenceSpeed * 0.7) + phaseOffset) * (isHero ? 2.5 : 1.8);
     let bodyTilt = 0;
+    let bodyScale = 1;
+    let celebrationGlowMultiplier = 1;
 
-    if (!reducedMotion) {
-      if (reaction === 'STARTLED_JUMP' || reaction === 'CELEBRATION_CHORUS') {
+    const celebrationPose =
+      reaction === 'CELEBRATION_CHORUS' &&
+      pres?.celebrationElapsedSec !== undefined &&
+      pres.celebrationSurvivorIndex !== undefined &&
+      pres.celebrationSurvivorCount !== undefined &&
+      pres.celebrationTotalWispCount !== undefined
+        ? deriveWispCelebrationPose({
+            wispId: wisp.id,
+            elapsedSec: pres.celebrationElapsedSec,
+            survivorIndex: pres.celebrationSurvivorIndex,
+            survivorCount: pres.celebrationSurvivorCount,
+            totalWispCount: pres.celebrationTotalWispCount,
+            reducedMotion,
+          })
+        : null;
+
+    if (celebrationPose?.hasStarted) {
+      swayX += celebrationPose.offsetX;
+      bobY += celebrationPose.offsetY;
+      bodyTilt += celebrationPose.rotationRad;
+      bodyScale = celebrationPose.scale;
+      celebrationGlowMultiplier = celebrationPose.glowMultiplier;
+    } else if (!reducedMotion) {
+      if (reaction === 'STARTLED_JUMP') {
         bobY -= Math.abs(Math.sin(animTime * 11 + index)) * 9;
       } else if (reaction === 'COWER' || reaction === 'BRACE_FOR_IMPACT') {
         bobY += 4;
@@ -65,9 +90,11 @@ export function renderWisps(
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(bodyTilt);
+    ctx.scale(bodyScale, bodyScale);
 
     // 3. Outer Elemental Luminescence Aura (Hero Wisp has a richer double halo)
-    const glowRadius = wisp.radius * (isHero ? 2.65 : 2.15);
+    const glowRadius =
+      wisp.radius * (isHero ? 2.65 : 2.15) * celebrationGlowMultiplier;
     const grad = ctx.createRadialGradient(0, 0, wisp.radius * 0.15, 0, 0, glowRadius);
     grad.addColorStop(0, wisp.glowColor);
     grad.addColorStop(0.48, wisp.color + '88');
