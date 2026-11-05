@@ -9,6 +9,100 @@ export const C1_VISUAL_SCHEMA_VERSION = 1;
 export const C1_TRANSFORMATION_DURATION_SEC = 0.85;
 
 export type ConstructionVisualMode = 'PROTOTYPE' | 'TRANSFORMING' | 'TRANSFORMED';
+export type ConstructionDepthFamily =
+  | 'NONE'
+  | 'WOOD_BEAM_DEPTH'
+  | 'WOOD_BLOCK_DEPTH'
+  | 'STONE_DEPTH';
+
+export interface ConstructionDepthProfile {
+  family: ConstructionDepthFamily;
+  alpha: number;
+  depthVector: { x: number; y: number };
+  topFaceAlpha: number;
+  sideFaceAlpha: number;
+  contactShadowAlpha: number;
+  hardwareLiftPx: number;
+  runeRecessPx: number;
+}
+
+const C1_DEPTH_VECTOR = { x: 6, y: -6 } as const;
+
+export function deriveConstructionDepthProfile(input: {
+  materialType: MaterialType;
+  isPrebuilt: boolean;
+  transformationProgress: number;
+}): ConstructionDepthProfile {
+  const alpha = Math.max(0, Math.min(1, input.transformationProgress));
+  if (alpha <= 0) {
+    return {
+      family: 'NONE',
+      alpha: 0,
+      depthVector: { x: 0, y: 0 },
+      topFaceAlpha: 0,
+      sideFaceAlpha: 0,
+      contactShadowAlpha: 0,
+      hardwareLiftPx: 0,
+      runeRecessPx: 0,
+    };
+  }
+  const multiplier =
+    input.materialType === 'wood_beam'
+      ? 1
+      : input.materialType === 'wood_block'
+        ? 1.15
+        : 1.4;
+  const family: ConstructionDepthFamily =
+    input.materialType === 'wood_beam'
+      ? 'WOOD_BEAM_DEPTH'
+      : input.materialType === 'wood_block'
+        ? 'WOOD_BLOCK_DEPTH'
+        : 'STONE_DEPTH';
+  return {
+    family,
+    alpha,
+    depthVector: {
+      x: Number((C1_DEPTH_VECTOR.x * multiplier).toFixed(2)),
+      y: Number((C1_DEPTH_VECTOR.y * multiplier).toFixed(2)),
+    },
+    topFaceAlpha: 0.24 * alpha,
+    sideFaceAlpha: 0.34 * alpha,
+    contactShadowAlpha: (input.materialType === 'stone_block' ? 0.38 : 0.28) * alpha,
+    hardwareLiftPx: (input.materialType === 'stone_block' ? 3.2 : 2.4) * alpha,
+    runeRecessPx: input.isPrebuilt && input.materialType === 'stone_block' ? 2.2 * alpha : 0,
+  };
+}
+
+export interface ConstructionSeamDepthProfile {
+  family: ConstructionSeamVisualFamily;
+  alpha: number;
+  depthVector: { x: number; y: number };
+  hardwareLiftPx: number;
+  damagedHardware: boolean;
+}
+
+export function deriveConstructionSeamDepthProfile(
+  joint: Pick<
+    TimberJoint,
+    'jointType' | 'socketAId' | 'socketBId' | 'state'
+  >,
+  transformationProgress: number,
+): ConstructionSeamDepthProfile {
+  const alpha = Math.max(0, Math.min(1, transformationProgress));
+  const family = classifyConstructionSeamVisualFamily(joint);
+  const multiplier = family === 'BROAD_FACE_CLAMP' ? 0.55 : 0.45;
+  return {
+    family,
+    alpha,
+    depthVector: {
+      x: Number((C1_DEPTH_VECTOR.x * multiplier * alpha).toFixed(2)),
+      y: Number((C1_DEPTH_VECTOR.y * multiplier * alpha).toFixed(2)),
+    },
+    hardwareLiftPx: (family === 'BROAD_FACE_CLAMP' ? 3.6 : 2.8) * alpha,
+    damagedHardware: joint.state === 'BROKEN',
+  };
+}
+
 export type ConstructionSeamVisualFamily =
   | 'BROAD_FACE_CLAMP'
   | 'ENDPOINT_SHOE'

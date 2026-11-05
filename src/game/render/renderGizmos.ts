@@ -20,7 +20,9 @@ import {
 } from '../types';
 import { renderPiece } from './renderPieces';
 import {
+  deriveConstructionSeamDepthProfile,
   deriveSeamVisualDescriptor,
+  type ConstructionSeamDepthProfile,
   type SeamVisualDescriptor,
 } from '../presentation/constructionTransformation';
 
@@ -29,6 +31,7 @@ export interface TransformedSeamDecorationStyle {
   family: SeamVisualDescriptor['family'];
   persistentBrokenScar: boolean;
   stressAlpha: number;
+  depth: ConstructionSeamDepthProfile;
 }
 
 export function getTransformedSeamDecorationStyle(
@@ -36,11 +39,13 @@ export function getTransformedSeamDecorationStyle(
   transformationProgress: number,
 ): TransformedSeamDecorationStyle {
   const descriptor = deriveSeamVisualDescriptor(joint, transformationProgress);
+  const depth = deriveConstructionSeamDepthProfile(joint, transformationProgress);
   return {
     alpha: descriptor.transformationProgress,
     family: descriptor.family,
     persistentBrokenScar: descriptor.persistentBrokenScar,
     stressAlpha: descriptor.stressAlpha,
+    depth,
   };
 }
 
@@ -101,6 +106,12 @@ export function renderTimberJoints(
         ctx.save();
         ctx.translate(scar.x, scar.y);
         ctx.globalAlpha *= style.alpha * 0.9;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+        ctx.save();
+        ctx.translate(style.depth.depthVector.x, style.depth.depthVector.y);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillRect(-6, -3, 12, 6);
+        ctx.restore();
         ctx.fillStyle = 'rgba(51, 65, 85, 0.9)';
         ctx.strokeStyle = 'rgba(248, 113, 113, 0.95)';
         ctx.lineWidth = 1.8;
@@ -218,6 +229,31 @@ export function renderTimberJoints(
     if (transformedStyle.alpha > 0) {
       ctx.save();
       ctx.globalAlpha *= transformedStyle.alpha;
+      const seamDepth = transformedStyle.depth;
+      if (
+        transformedStyle.family === 'BROAD_FACE_CLAMP' ||
+        transformedStyle.family === 'ENDPOINT_SHOE'
+      ) {
+        ctx.save();
+        ctx.translate(seamDepth.depthVector.x, seamDepth.depthVector.y);
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.76)';
+        ctx.strokeStyle = 'rgba(2, 6, 23, 0.82)';
+        ctx.lineWidth = 1;
+        if (transformedStyle.family === 'BROAD_FACE_CLAMP') {
+          ctx.fillRect(-9, -3.5, 18, 7);
+          ctx.strokeRect(-9, -3.5, 18, 7);
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(-6, -5);
+          ctx.lineTo(6, -5);
+          ctx.lineTo(7, 5);
+          ctx.lineTo(-7, 5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       if (transformedStyle.family === 'BROAD_FACE_CLAMP') {
         ctx.fillStyle = 'rgba(30, 41, 59, 0.94)';
         ctx.strokeStyle = isStrained ? '#f59e0b' : '#67e8f9';
@@ -229,6 +265,12 @@ export function renderTimberJoints(
         ctx.arc(-5, 0, 1.4, 0, Math.PI * 2);
         ctx.arc(5, 0, 1.4, 0, Math.PI * 2);
         ctx.fill();
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.72)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(-8, -2.6);
+        ctx.lineTo(8, -2.6);
+        ctx.stroke();
       } else if (transformedStyle.family === 'ENDPOINT_SHOE') {
         ctx.fillStyle = 'rgba(30, 41, 59, 0.94)';
         ctx.strokeStyle = isStrained ? '#f59e0b' : '#a5f3fc';
@@ -246,6 +288,12 @@ export function renderTimberJoints(
         ctx.arc(-3, 0, 1.25, 0, Math.PI * 2);
         ctx.arc(3, 0, 1.25, 0, Math.PI * 2);
         ctx.fill();
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.68)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(-5, -4.2);
+        ctx.lineTo(5, -4.2);
+        ctx.stroke();
       }
       if (isStrained) {
         ctx.strokeStyle = `rgba(251, 191, 36, ${0.55 + transformedStyle.stressAlpha * 0.4})`;
