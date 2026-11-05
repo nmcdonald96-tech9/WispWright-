@@ -127,6 +127,111 @@ export interface ConstructionTransformationPresentationState {
   isAcceptedRevision: boolean;
 }
 
+export type ConstructionMaterialVisualFamily =
+  | 'WOOD_BEAM_MATERIAL'
+  | 'WOOD_BLOCK_MATERIAL'
+  | 'STONE_MATERIAL';
+
+export interface ConstructionMaterialLightingProfile {
+  family: ConstructionMaterialVisualFamily;
+  alpha: number;
+  keyLightDirection: { x: number; y: number };
+  topHighlightAlpha: number;
+  lowerEdgeShadowAlpha: number;
+  bevelWidthPx: number;
+  grainPathCount: number;
+  knotCount: number;
+  edgeWearAlpha: number;
+  hardwareShadowOffset: { x: number; y: number };
+  hardwareHighlightAlpha: number;
+  contactShadowAlpha: number;
+  recessShadowAlpha: number;
+  runeGlowAlpha: number;
+  runeGrooveAlpha: number;
+  surfaceVariant: number;
+  damageExposureAlpha: number;
+  damageBranchCount: number;
+}
+
+export function deriveConstructionMaterialLightingProfile(input: {
+  descriptor: PieceVisualDescriptor;
+  isPrebuilt: boolean;
+  reducedIntensity?: boolean;
+}): ConstructionMaterialLightingProfile {
+  const { descriptor } = input;
+  const alpha = Math.max(0, Math.min(1, descriptor.transformationProgress));
+  const intensity = input.reducedIntensity ? 0.55 : 1;
+  const family: ConstructionMaterialVisualFamily =
+    descriptor.materialType === 'wood_beam'
+      ? 'WOOD_BEAM_MATERIAL'
+      : descriptor.materialType === 'wood_block'
+        ? 'WOOD_BLOCK_MATERIAL'
+        : 'STONE_MATERIAL';
+  const isWood = family !== 'STONE_MATERIAL';
+  const variant = descriptor.seed % 8;
+  const severity = Math.max(0, Math.min(1, descriptor.severity));
+  return {
+    family,
+    alpha,
+    keyLightDirection: { x: -0.71, y: -0.71 },
+    topHighlightAlpha: (isWood ? 0.34 : 0.24) * alpha * intensity,
+    lowerEdgeShadowAlpha: (isWood ? 0.34 : 0.46) * alpha,
+    bevelWidthPx: (family === 'WOOD_BEAM_MATERIAL' ? 2.2 : isWood ? 2.8 : 3.2) * alpha,
+    grainPathCount: isWood ? 2 + (variant % 2) : 0,
+    knotCount: isWood && variant % 3 === 0 ? 1 : 0,
+    edgeWearAlpha: (0.08 + (variant % 4) * 0.025) * alpha,
+    hardwareShadowOffset: {
+      x: Number((1.5 * alpha).toFixed(2)),
+      y: Number((1.8 * alpha).toFixed(2)),
+    },
+    hardwareHighlightAlpha: (isWood ? 0.58 : 0.42) * alpha * intensity,
+    contactShadowAlpha: (isWood ? 0.26 : 0.36) * alpha,
+    recessShadowAlpha: (isWood ? 0.30 : 0.42) * alpha,
+    runeGlowAlpha:
+      input.isPrebuilt && descriptor.materialType === 'stone_block'
+        ? 0.46 * alpha * intensity
+        : 0,
+    runeGrooveAlpha:
+      input.isPrebuilt && descriptor.materialType === 'stone_block' ? 0.82 * alpha : 0,
+    surfaceVariant: variant,
+    damageExposureAlpha: severity * alpha,
+    damageBranchCount: severity <= 0 ? 0 : 1 + Math.min(3, Math.floor(severity * 4)),
+  };
+}
+
+export interface ConstructionDamageVisualProfile {
+  condition: PieceCondition;
+  severity: number;
+  crackAlpha: number;
+  exposedMaterialAlpha: number;
+  sideFaceDamageAlpha: number;
+  chipCount: number;
+  attachmentRegion: 'NONE' | 'WOOD_SURFACE' | 'STONE_SURFACE';
+}
+
+export function deriveConstructionDamageVisualProfile(
+  descriptor: PieceVisualDescriptor,
+): ConstructionDamageVisualProfile {
+  const severity = Math.max(0, Math.min(1, descriptor.severity));
+  const transformed = Math.max(0, Math.min(1, descriptor.transformationProgress));
+  const isDamaged = descriptor.wearState === 'CRACKED' || descriptor.wearState === 'BROKEN';
+  const effectiveSeverity = isDamaged ? Math.max(0.35, severity) : severity;
+  const isStone = descriptor.materialType === 'stone_block' || descriptor.materialType === 'bullseye_block';
+  return {
+    condition: descriptor.wearState,
+    severity: effectiveSeverity,
+    crackAlpha: isDamaged ? Math.min(1, 0.48 + effectiveSeverity * 0.42) * transformed : 0,
+    exposedMaterialAlpha: isDamaged ? effectiveSeverity * transformed : 0,
+    sideFaceDamageAlpha: isDamaged ? effectiveSeverity * 0.72 * transformed : 0,
+    chipCount: isDamaged ? 1 + Math.min(4, Math.floor(effectiveSeverity * 5)) : 0,
+    attachmentRegion: transformed <= 0
+      ? 'NONE'
+      : isStone
+        ? 'STONE_SURFACE'
+        : 'WOOD_SURFACE',
+  };
+}
+
 export interface PieceVisualDescriptor {
   pieceId: string;
   materialType: MaterialType;
