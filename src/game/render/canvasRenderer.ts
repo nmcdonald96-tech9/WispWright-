@@ -8,6 +8,7 @@ import { Camera } from '../input/camera';
 import { isEditableMode } from '../input/gestureController';
 import { PhysicsBridge } from '../physics/physicsBridge';
 import { PresentationDirector } from '../presentation/presentationDirector';
+import { derivePieceVisualDescriptor } from '../presentation/constructionTransformation';
 import { SiegeController } from '../siege/siegeController';
 import { AUTHORED_ATTACKS } from '../siege/siegeConfig';
 import { LevelStore } from '../state/levelStore';
@@ -582,6 +583,7 @@ export class CanvasRenderer {
     const pres = this.presentationDirector;
     const reducedMotion = pres.settings.reducedMotion;
     const isDeveloperMode = pres.settings.presentationMode === 'DEVELOPER';
+    const constructionVisual = pres.getConstructionTransformationState();
 
     ctx.clearRect(0, 0, camera.viewWidth, camera.viewHeight);
 
@@ -688,6 +690,13 @@ export class CanvasRenderer {
       const simulatedTransforms = activeBridge.getSimulatedTransforms(state.pieces);
       for (const sim of simulatedTransforms) {
         if (sim.condition === 'LOST') continue;
+        const visualDescriptor = derivePieceVisualDescriptor({
+          pieceId: sim.pieceId,
+          materialType: sim.type,
+          condition: sim.condition,
+          impactSeverity: sim.impactSeverity,
+          transformationProgress: constructionVisual.transformationProgress,
+        });
         renderPiece(
           ctx,
           sim.type,
@@ -710,6 +719,7 @@ export class CanvasRenderer {
                 reducedMotion,
               }
             : undefined,
+          visualDescriptor,
         );
       }
       renderTimberJoints(
@@ -720,12 +730,20 @@ export class CanvasRenderer {
         this.timeSec,
         reducedMotion,
         isDeveloperMode,
+        constructionVisual.transformationProgress,
       );
     } else {
       for (const piece of state.pieces) {
         if (piece.condition === 'LOST') continue;
         if (this.dragState?.pieceId === piece.id) continue;
         const isSelected = this.selectedPieceId === piece.id;
+        const visualDescriptor = derivePieceVisualDescriptor({
+          pieceId: piece.id,
+          materialType: piece.type,
+          condition: piece.condition ?? 'INTACT',
+          impactSeverity: piece.impactSeverity ?? 0,
+          transformationProgress: constructionVisual.transformationProgress,
+        });
         renderPiece(
           ctx,
           piece.type,
@@ -748,6 +766,7 @@ export class CanvasRenderer {
                 reducedMotion,
               }
             : undefined,
+          visualDescriptor,
         );
       }
       renderTimberJoints(
@@ -758,6 +777,7 @@ export class CanvasRenderer {
         this.timeSec,
         reducedMotion,
         isDeveloperMode,
+        constructionVisual.transformationProgress,
       );
     }
 

@@ -19,6 +19,30 @@ import {
   WispEntity,
 } from '../types';
 import { renderPiece } from './renderPieces';
+import {
+  deriveSeamVisualDescriptor,
+  type SeamVisualDescriptor,
+} from '../presentation/constructionTransformation';
+
+export interface TransformedSeamDecorationStyle {
+  alpha: number;
+  family: SeamVisualDescriptor['family'];
+  persistentBrokenScar: boolean;
+  stressAlpha: number;
+}
+
+export function getTransformedSeamDecorationStyle(
+  joint: TimberJoint,
+  transformationProgress: number,
+): TransformedSeamDecorationStyle {
+  const descriptor = deriveSeamVisualDescriptor(joint, transformationProgress);
+  return {
+    alpha: descriptor.transformationProgress,
+    family: descriptor.family,
+    persistentBrokenScar: descriptor.persistentBrokenScar,
+    stressAlpha: descriptor.stressAlpha,
+  };
+}
 
 export function renderTimberJoints(
   ctx: CanvasRenderingContext2D,
@@ -28,6 +52,7 @@ export function renderTimberJoints(
   timeSec: number,
   reducedMotion = false,
   isDeveloperMode = false,
+  transformationProgress = 0,
 ): void {
   if (!joints || joints.length === 0) return;
 
@@ -70,6 +95,26 @@ export function renderTimberJoints(
         }
         ctx.restore();
       }
+      if (transformationProgress > 0) {
+        const style = getTransformedSeamDecorationStyle(joint, transformationProgress);
+        const scar = joint.breakPosition ?? joint.worldPosition;
+        ctx.save();
+        ctx.translate(scar.x, scar.y);
+        ctx.globalAlpha *= style.alpha * 0.9;
+        ctx.fillStyle = 'rgba(51, 65, 85, 0.9)';
+        ctx.strokeStyle = 'rgba(248, 113, 113, 0.95)';
+        ctx.lineWidth = 1.8;
+        ctx.rotate(Math.PI / 4);
+        ctx.fillRect(-6, -3, 12, 6);
+        ctx.strokeRect(-6, -3, 12, 6);
+        ctx.beginPath();
+        ctx.moveTo(-7, -7);
+        ctx.lineTo(7, 7);
+        ctx.moveTo(7, -7);
+        ctx.lineTo(-7, 7);
+        ctx.stroke();
+        ctx.restore();
+      }
       continue;
     }
 
@@ -81,6 +126,10 @@ export function renderTimberJoints(
     const worldB = Vec2.add(pieceB.position, Vec2.rotate(joint.localAnchorB, pieceB.rotation));
     const midX = (worldA.x + worldB.x) * 0.5;
     const midY = (worldA.y + worldB.y) * 0.5;
+    const transformedStyle = getTransformedSeamDecorationStyle(
+      joint,
+      transformationProgress,
+    );
     const isStrained = joint.state === 'STRAINED';
     const isRoofPeak = joint.jointType === 'ROOF_PEAK' || joint.visualJointCapType === 'PEAK_CAP';
     const isBrace = joint.jointType === 'DIAGONAL_BRACE';
@@ -164,6 +213,48 @@ export function renderTimberJoints(
       ctx.fillRect(-r, -r, r * 2, r * 2);
       ctx.strokeRect(-r, -r, r * 2, r * 2);
       ctx.rotate(-Math.PI / 4);
+    }
+
+    if (transformedStyle.alpha > 0) {
+      ctx.save();
+      ctx.globalAlpha *= transformedStyle.alpha;
+      if (transformedStyle.family === 'BROAD_FACE_CLAMP') {
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.94)';
+        ctx.strokeStyle = isStrained ? '#f59e0b' : '#67e8f9';
+        ctx.lineWidth = 1.4;
+        ctx.fillRect(-9, -3.5, 18, 7);
+        ctx.strokeRect(-9, -3.5, 18, 7);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.beginPath();
+        ctx.arc(-5, 0, 1.4, 0, Math.PI * 2);
+        ctx.arc(5, 0, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (transformedStyle.family === 'ENDPOINT_SHOE') {
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.94)';
+        ctx.strokeStyle = isStrained ? '#f59e0b' : '#a5f3fc';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(-6, -5);
+        ctx.lineTo(6, -5);
+        ctx.lineTo(7, 5);
+        ctx.lineTo(-7, 5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#cbd5e1';
+        ctx.beginPath();
+        ctx.arc(-3, 0, 1.25, 0, Math.PI * 2);
+        ctx.arc(3, 0, 1.25, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (isStrained) {
+        ctx.strokeStyle = `rgba(251, 191, 36, ${0.55 + transformedStyle.stressAlpha * 0.4})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
     if (isDeveloperMode) {

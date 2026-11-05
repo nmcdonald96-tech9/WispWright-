@@ -5,6 +5,128 @@
 
 import { MATERIAL_CONFIGS } from '../config';
 import { MaterialType, PieceCondition, Vector2 } from '../types';
+import type { PieceVisualDescriptor } from '../presentation/constructionTransformation';
+
+export interface TransformedPieceDecorationStyle {
+  alpha: number;
+  family: 'WOOD_BEAM' | 'WOOD_BLOCK' | 'STONE' | 'NONE';
+  variant: number;
+  prebuiltRune: boolean;
+}
+
+export function getTransformedPieceDecorationStyle(
+  descriptor: PieceVisualDescriptor | undefined,
+  isPrebuilt: boolean,
+): TransformedPieceDecorationStyle {
+  const alpha = Math.max(0, Math.min(1, descriptor?.transformationProgress ?? 0));
+  const type = descriptor?.materialType;
+  return {
+    alpha,
+    family:
+      alpha <= 0 || !type
+        ? 'NONE'
+        : type === 'wood_beam'
+          ? 'WOOD_BEAM'
+          : type === 'wood_block'
+            ? 'WOOD_BLOCK'
+            : 'STONE',
+    variant: descriptor?.variantStyle ?? 0,
+    prebuiltRune: Boolean(isPrebuilt && type === 'stone_block' && alpha > 0),
+  };
+}
+
+function renderTransformedPieceDetails(
+  ctx: CanvasRenderingContext2D,
+  descriptor: PieceVisualDescriptor,
+  isPrebuilt: boolean,
+  hw: number,
+  hh: number,
+): void {
+  const style = getTransformedPieceDecorationStyle(descriptor, isPrebuilt);
+  if (style.family === 'NONE') return;
+  ctx.save();
+  ctx.globalAlpha *= style.alpha;
+  if (style.family === 'WOOD_BEAM') {
+    ctx.strokeStyle = 'rgba(254, 215, 170, 0.48)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-hw + 7, -hh + 3);
+    ctx.lineTo(hw - 7, -hh + 3);
+    ctx.moveTo(-hw + 7, hh - 3);
+    ctx.lineTo(hw - 7, hh - 3);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(69, 26, 3, 0.52)';
+    ctx.lineWidth = 0.9;
+    const grainOffset = (style.variant - 1.5) * 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-hw + 17, grainOffset);
+    ctx.bezierCurveTo(-hw * 0.35, grainOffset - 2, hw * 0.35, grainOffset + 2, hw - 17, grainOffset);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(30, 41, 59, 0.82)';
+    ctx.fillRect(-hw + 5, -hh + 2, 7, hh * 2 - 4);
+    ctx.fillRect(hw - 12, -hh + 2, 7, hh * 2 - 4);
+    ctx.fillStyle = '#cbd5e1';
+    for (const x of [-hw + 8.5, hw - 8.5]) {
+      ctx.beginPath();
+      ctx.arc(x, 0, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(251, 146, 60, 0.62)';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(-hw * 0.35, 0);
+    ctx.lineTo(hw * 0.35, 0);
+    ctx.stroke();
+  } else if (style.family === 'WOOD_BLOCK') {
+    ctx.strokeStyle = 'rgba(254, 215, 170, 0.48)';
+    ctx.lineWidth = 1.3;
+    ctx.strokeRect(-hw + 5, -hh + 5, hw * 2 - 10, hh * 2 - 10);
+    ctx.strokeStyle = 'rgba(30, 41, 59, 0.86)';
+    ctx.lineWidth = 3;
+    const inset = 5;
+    for (const [x, y] of [
+      [-hw + inset, -hh + inset], [hw - inset, -hh + inset],
+      [-hw + inset, hh - inset], [hw - inset, hh - inset],
+    ]) {
+      ctx.beginPath();
+      ctx.moveTo(x, y + (y < 0 ? 7 : -7));
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + (x < 0 ? 7 : -7), y);
+      ctx.stroke();
+      ctx.fillStyle = '#cbd5e1';
+      ctx.beginPath();
+      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    ctx.strokeStyle = 'rgba(226, 232, 240, 0.28)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-hw + 4, -hh + 4, hw * 2 - 8, hh * 2 - 8);
+    const courseY = style.variant % 2 === 0 ? 0 : -hh * 0.18;
+    ctx.beginPath();
+    ctx.moveTo(-hw + 3, courseY);
+    ctx.lineTo(hw - 3, courseY);
+    ctx.moveTo(0, -hh + 3);
+    ctx.lineTo(0, courseY);
+    ctx.moveTo(-hw * 0.45, courseY);
+    ctx.lineTo(-hw * 0.45, hh - 3);
+    ctx.moveTo(hw * 0.45, courseY);
+    ctx.lineTo(hw * 0.45, hh - 3);
+    ctx.stroke();
+    if (style.prebuiltRune) {
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.78)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(0, -8);
+      ctx.lineTo(6, 0);
+      ctx.lineTo(0, 8);
+      ctx.lineTo(-6, 0);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
 
 export interface BullseyeRenderFlags {
   active?: boolean;
@@ -28,6 +150,7 @@ export function renderPiece(
   impactSeverity = 0,
   isDeveloperMode = false,
   bullseyeFlags?: BullseyeRenderFlags,
+  visualDescriptor?: PieceVisualDescriptor,
 ): void {
   const config = MATERIAL_CONFIGS[type];
   const w = config.width;
@@ -336,6 +459,9 @@ export function renderPiece(
     ctx.stroke();
   }
 
+  if (visualDescriptor && visualDescriptor.transformationProgress > 0) {
+    renderTransformedPieceDetails(ctx, visualDescriptor, isPrebuilt, hw, hh);
+  }
   // Expressive Structural Damage & Cracking Overlay (No CRK text in Player Presentation Mode)
   if (condition === 'CRACKED') {
     // Deep multi-branch dark fracture lines
