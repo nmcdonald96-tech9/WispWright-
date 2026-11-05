@@ -28,6 +28,12 @@ import {
 } from '../types';
 import { AUTHORED_ATTACKS, DistancePreset, DISTANCE_PRESETS } from './siegeConfig';
 import {
+  advancePostImpactResolution,
+  createPostImpactResolutionState,
+  getPostImpactResolutionTiming,
+  type PostImpactResolutionState,
+} from './postImpactResolution';
+import {
   selectTargetAndTrajectory,
   TargetCandidate,
   TargetingDiagnostics,
@@ -71,6 +77,8 @@ export class SiegeController {
   public aimingTimer = 0;
   public impactTimer = 0;
   public settlingTimer = 0;
+  public postImpactResolution: PostImpactResolutionState =
+    createPostImpactResolutionState();
   public intermissionTimer = 0;
   public emergencyStopUsed = false;
   public overlapWarning: string | null = null;
@@ -957,6 +965,7 @@ export class SiegeController {
 
         if (this.impactTimer >= 0.4) {
           this.settlingTimer = 0;
+          this.postImpactResolution = createPostImpactResolutionState();
           this.mode = 'SETTLING';
           this.store.setSavedPhase('SETTLING');
           this.onStateChange?.();
@@ -975,7 +984,19 @@ export class SiegeController {
         }
 
         const report = this.physicsBridge.getStabilityReport(dt);
-        if (report.isSettled || this.settlingTimer >= 6.0) {
+        const brokenJointCount = this.physicsBridge.diagnostics.brokenTimberJointCount;
+        const timing = getPostImpactResolutionTiming(
+          this.currentAttackIndex === AUTHORED_ATTACKS.length - 1,
+        );
+        this.postImpactResolution = advancePostImpactResolution({
+          state: this.postImpactResolution,
+          dt,
+          stabilitySettled: report.isSettled,
+          fallenCount: report.fallenCount,
+          brokenJointCount,
+          timing,
+        });
+        if (this.postImpactResolution.readyToResolve) {
           this.resolveCurrentAttack();
         }
         break;
