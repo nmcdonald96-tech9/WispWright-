@@ -751,11 +751,11 @@ export class LevelStore {
       return {
         id: 'region_western_roof_beam',
         pieceType: 'wood_beam',
-        center: { x: 296, y: 672 },
+        center: { x: 200, y: 672 },
         width: MATERIAL_CONFIGS.wood_beam.width,
         height: MATERIAL_CONFIGS.wood_beam.height,
         toleranceRadius: 96,
-        label: 'Roof Span Support',
+        label: 'Supported Beam Start',
         supportPoints: [
           { x: 200, y: 684 },
           { x: 392, y: 732 },
