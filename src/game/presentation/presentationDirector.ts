@@ -30,6 +30,7 @@ import {
   advanceConstructionTransformationState,
   deriveConstructionTransformationState,
 } from './constructionTransformation';
+import { deriveIncomingWispWarning } from './wispIncomingWarning';
 import type { ConstructionTransformationPresentationState } from './constructionTransformation';
 const PRESENTATION_SETTINGS_STORAGE_KEY = 'alchemical_fortress_phase4_presentation_v1';
 
@@ -1263,22 +1264,14 @@ export class PresentationDirector {
 
       // Priority 2: Immediate Danger (Incoming Projectile)
       if (activeProj) {
-        lookTarget = activeProj.position;
-        const dist = Math.hypot(
-          activeProj.position.x - wisp.position.x,
-          activeProj.position.y - wisp.position.y,
-        );
-        if (dist < 140) {
-          state = meta.tendency === 'NERVOUS' ? 'COWER' : 'BRACE_FOR_IMPACT';
-          this.emitEvent('WISP_NEAR_MISS', timeSec, siege.currentAttackIndex, {
-            wispId: wisp.id,
-            position: wisp.position,
-          });
-        } else if (dist < 260) {
-          state = meta.tendency === 'BRAVE' ? 'ALARMED_ALERT' : 'GASP';
-        } else {
-          state = 'WATCH_TRAJECTORY';
-        }
+        const warning = deriveIncomingWispWarning({
+          wispPosition: wisp.position,
+          projectilePosition: activeProj.position,
+          projectileVelocity: activeProj.velocity,
+          tendency: meta.tendency,
+        });
+        lookTarget = warning.lookTarget;
+        state = warning.reactionState;
       }
       // Priority 3: Nearby Collapse or Heavy Debris
       else if (effectiveMode === 'IMPACT_RESOLUTION' || effectiveMode === 'SETTLING') {
