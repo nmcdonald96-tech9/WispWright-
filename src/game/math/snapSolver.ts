@@ -222,6 +222,166 @@ export function buildTimberJointId(
   return sideA < sideB ? `tjoint__${sideA}__${sideB}` : `tjoint__${sideB}__${sideA}`;
 }
 
+const BROAD_FACE_FAMILY = 'BROAD_FACE';
+const FINALIZED_BROAD_FACE_NORMAL_DISTANCE_PX = 2.5;
+
+function socketNamesForBroadFaceCheck(
+  joint: ProposedTimberJoint | TimberJoint,
+): [string, string] {
+  if ('sourceSocketName' in joint) {
+    return [joint.sourceSocketName, joint.targetSocketName];
+  }
+  return [joint.socketAId, joint.socketBId];
+}
+
+/** True only for a beam broad-side to block-edge TIMBER_FACE relationship. */
+export function isBroadFaceTimberJoint(
+  joint: ProposedTimberJoint | TimberJoint,
+): boolean {
+  if (joint.jointType !== 'TIMBER_FACE') {
+    return false;
+  }
+  if (
+    joint.connectionSubtype !== undefined &&
+    joint.connectionSubtype !== 'FACE_BINDING'
+  ) {
+    return false;
+  }
+  const [a, b] = socketNamesForBroadFaceCheck(joint);
+  const isBeamSide = (value: string) => value.includes('SIDE_TOP') || value.includes('SIDE_BOTTOM');
+  const isBlockEdge = (value: string) =>
+    value.endsWith('TOP_EDGE') ||
+    value.endsWith('BOTTOM_EDGE') ||
+    value.endsWith('LEFT_EDGE') ||
+    value.endsWith('RIGHT_EDGE');
+  return (isBeamSide(a) && isBlockEdge(b)) || (isBeamSide(b) && isBlockEdge(a));
+}
+
+/** Canonical preview/commit identity for one broad-face relationship. */
+export function getBroadFaceRelationshipKey(pieceAId: string, pieceBId: string): string {
+  const [idLow, idHigh] = pieceAId < pieceBId ? [pieceAId, pieceBId] : [pieceBId, pieceAId];
+  return `${idLow}::${idHigh}::${BROAD_FACE_FAMILY}`;
+}
+
+interface DiscoverSecondaryBroadFaceSeamsInput {
+  activePieceId: string;
+  activeType: MaterialType;
+  finalizedPos: Vector2;
+  finalizedRot: number;
+  activeIsPrebuilt: boolean;
+  validPieces: readonly PlacedPiece[];
+  proposedTimberJoints: readonly ProposedTimberJoint[];
+  preservedJoints: readonly TimberJoint[];
+}
+
+/**
+ * Queries the finalized transform for additional flush broad-face supports.
+ * This helper cannot alter the active transform, candidate ranking, or lock state.
+ */
+export function discoverSecondaryBroadFaceSeams(
+  input: DiscoverSecondaryBroadFaceSeamsInput,
+): ProposedTimberJoint[] {
+  const existingKeys = new Set<string>();
+  for (const proposal of input.proposedTimberJoints) {
+    if (isBroadFaceTimberJoint(proposal)) {
+      existingKeys.add(getBroadFaceRelationshipKey(input.activePieceId, proposal.targetPieceId));
+    }
+  }
+  for (const joint of input.preservedJoints) {
+    if (isBroadFaceTimberJoint(joint)) {
+      existingKeys.add(getBroadFaceRelationshipKey(joint.pieceAId, joint.pieceBId));
+    }
+  }
+
+  const discovered: ProposedTimberJoint[] = [];
+  for (const support of input.validPieces) {
+    if (
+      support.id === input.activePieceId ||
+      support.condition === 'BROKEN' ||
+      support.condition === 'LOST'
+    ) {
+      continue;
+    }
+    const key = getBroadFaceRelationshipKey(input.activePieceId, support.id);
+    if (existingKeys.has(key)) continue;
+
+    const solution = solveBroadFaceOverlap(
+      input.activeType,
+      input.finalizedPos,
+      input.finalizedRot,
+      support,
+      input.activePieceId,
+      {
+        inPlace: true,
+        maxNormalDistancePx: FINALIZED_BROAD_FACE_NORMAL_DISTANCE_PX,
+        minOverlapPx: MIN_BROAD_FACE_OVERLAP_PX,
+        dragIsPrebuilt: input.activeIsPrebuilt,
+      },
+    );
+    if (!solution?.valid) {
+      continue;
+    }
+
+    const canonicalRelationship = buildCanonicalRelationship({
+      pieceAId: input.activePieceId,
+      pieceAType: input.activeType,
+      pieceAPos: input.finalizedPos,
+      pieceARot: input.finalizedRot,
+      featureAId: solution.sourceFaceId,
+      pieceBId: support.id,
+      pieceBType: support.type,
+      pieceBPos: support.position,
+      pieceBRot: support.rotation,
+      featureBId: solution.targetFaceId,
+      connectionTaxonomy: solution.taxonomy,
+      jointProfileId: solution.strengthProfile,
+    });
+
+    discovered.push({
+      targetPieceId: support.id,
+      sourceSocketId: solution.sourceSocketId,
+      targetSocketId: solution.targetSocketId,
+      sourceSocketName: solution.sourceSocketName,
+      targetSocketName: solution.targetSocketName,
+      localAnchorA: solution.localAnchorA,
+      localAnchorB: solution.localAnchorB,
+      worldPosition: solution.worldContactPoint,
+      jointType: 'TIMBER_FACE',
+      connectionSubtype: solution.connectionSubtype,
+      materialA: input.activeType,
+      materialB: support.type,
+      materialPairKey: solution.materialPairKey,
+      isPrebuiltBinding: Boolean(input.activeIsPrebuilt || support.isPrebuilt),
+      restAngle: solution.restAngle,
+      restSeparation: 0,
+      seamSeparation: solution.seamSeparation,
+      strengthProfile: solution.strengthProfile,
+      complianceProfile: solution.strengthProfile,
+      creationReason: 'SNAP_COMMIT',
+      connectionTaxonomy: solution.taxonomy,
+      sourceFaceId: solution.sourceFaceId,
+      targetFaceId: solution.targetFaceId,
+      sourceCornerId: null,
+      targetCornerId: null,
+      sourceFeatureType: 'face',
+      targetFeatureType: 'face',
+      sourceFaceNormal: solution.sourceFaceNormal,
+      targetFaceNormal: solution.targetFaceNormal,
+      canonicalRelationship,
+      visualConnectionState: 'CANDIDATE_PREVIEW',
+      visualJointCapType: getVisualJointCapType('TIMBER_FACE', solution.taxonomy, solution.materialPairKey),
+      playerFacingConnectionLabel: 'Timber Face Joint available',
+    });
+    existingKeys.add(key);
+  }
+
+  return discovered.sort((a, b) =>
+    a.targetPieceId.localeCompare(b.targetPieceId) ||
+    String(a.sourceFaceId ?? '').localeCompare(String(b.sourceFaceId ?? '')) ||
+    String(a.targetFaceId ?? '').localeCompare(String(b.targetFaceId ?? '')),
+  );
+}
+
 /**
  * Detects whether two beam endpoints meeting at an apex form a Roof Peak (ROOF_PEAK).
  */
@@ -2812,6 +2972,29 @@ export function solveSnapAndValidation(
         }
       }
     }
+  }
+
+  // Phase B1: discover additional broad-face support seams against the finalized,
+  // post-roof-closure transform without changing primary acquisition or placement.
+  if (
+    isValid &&
+    snappingEnabled &&
+    !attachedAnchorId &&
+    (!freeAdjustActive || options?.commitAssistActive)
+  ) {
+    const b1BroadFaceSeams = discoverSecondaryBroadFaceSeams({
+      activePieceId: excludedPieceId || 'ghost',
+      activeType: type,
+      finalizedPos: bestPos,
+      finalizedRot: bestRot,
+      activeIsPrebuilt: Boolean(
+        excludedPieceId && placedPieces.find((piece) => piece.id === excludedPieceId)?.isPrebuilt,
+      ),
+      validPieces,
+      proposedTimberJoints,
+      preservedJoints,
+    });
+    proposedTimberJoints.push(...b1BroadFaceSeams);
   }
 
   if (proposedTimberJoints.length > 0) {

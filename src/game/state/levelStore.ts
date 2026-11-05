@@ -45,6 +45,7 @@ import {
   buildTimberJointId,
   evaluateJointsForPieceTransform,
   findManualBindCandidatesForPiece,
+  isBroadFaceTimberJoint,
   shortestSignedAngleDelta,
   validatePieceRotationTransaction,
 } from '../math/snapSolver';
@@ -1779,8 +1780,9 @@ export class LevelStore {
       (j) =>
         j.state !== 'BROKEN' &&
         (j.jointId === jointId ||
-          (j.pieceAId === sourcePieceId && j.pieceBId === proposal.targetPieceId) ||
-          (j.pieceAId === proposal.targetPieceId && j.pieceBId === sourcePieceId) ||
+          (((j.pieceAId === sourcePieceId && j.pieceBId === proposal.targetPieceId) ||
+            (j.pieceAId === proposal.targetPieceId && j.pieceBId === sourcePieceId)) &&
+            isBroadFaceTimberJoint(j) === isBroadFaceTimberJoint(proposal)) ||
           (proposal.sourceSocketName.startsWith('END_') &&
             ((j.pieceAId === sourcePieceId && j.socketAId === socketAId) ||
               (j.pieceBId === sourcePieceId && j.socketBId === socketAId)))),
@@ -1991,6 +1993,11 @@ export class LevelStore {
         ? [proposedJoint]
         : [];
     const proposedTargetIds = new Set(explicitProposals.map((p) => p.targetPieceId));
+    const broadFaceTargetIds = new Set(
+      explicitProposals
+        .filter((proposal) => isBroadFaceTimberJoint(proposal))
+        .map((proposal) => proposal.targetPieceId),
+    );
     const partnerAdjustmentsById = new Map<string, Vector2>();
     for (const pj of explicitProposals) {
       if (pj.partnerPieceAdjustment) {
@@ -2008,7 +2015,11 @@ export class LevelStore {
       const otherEffectivePos = partnerAdjustmentsById.get(other.id) ?? other.position;
       const oCfg = MATERIAL_CONFIGS[other.type];
       const oOBB = createOBB(otherEffectivePos, oCfg.width, oCfg.height, other.rotation);
-      const tol = proposedTargetIds.has(other.id) ? 0.05 : 2.5;
+      const tol = broadFaceTargetIds.has(other.id)
+        ? 2.5
+        : proposedTargetIds.has(other.id)
+          ? 0.05
+          : 2.5;
       if (getOBBPenetrationDepth(candidateOBB, oOBB, tol) > 0) {
         this.lastJointEditOutcome = 'REJECTED';
         this.lastJointRestoreReason = 'PIECE_OVERLAP';
