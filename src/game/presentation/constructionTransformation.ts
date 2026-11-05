@@ -6,6 +6,7 @@
 import { MaterialType, PieceCondition, TimberJoint, TimberJointState } from '../types';
 
 export const C1_VISUAL_SCHEMA_VERSION = 1;
+export const C1_TRANSFORMATION_DURATION_SEC = 0.85;
 
 export type ConstructionVisualMode = 'PROTOTYPE' | 'TRANSFORMING' | 'TRANSFORMED';
 export type ConstructionSeamVisualFamily =
@@ -107,6 +108,55 @@ export function deriveConstructionTransformationState(
   }
 
   return { mode: 'TRANSFORMED', transformationProgress: 1, isAcceptedRevision };
+}
+
+
+export interface AdvanceConstructionTransformationInput
+  extends ConstructionTransformationInput {
+  currentState: ConstructionTransformationPresentationState;
+  deltaSec: number;
+}
+
+/**
+ * Advances the presentation-only reveal without mutating authoritative game state.
+ * Prototype transitions are immediate for editing clarity. Accepted presentation
+ * phases animate once, while hydration may reconstruct the completed state directly.
+ */
+export function advanceConstructionTransformationState(
+  input: AdvanceConstructionTransformationInput,
+): ConstructionTransformationPresentationState {
+  const target = deriveConstructionTransformationState({
+    phase: input.phase,
+    acceptedRevisionId: input.acceptedRevisionId,
+    currentConstructionRevision: input.currentConstructionRevision,
+    previousMode: input.currentState.mode,
+    reducedMotion: input.reducedMotion,
+  });
+
+  if (target.mode === 'PROTOTYPE') {
+    return target;
+  }
+
+  if (
+    target.mode === 'TRANSFORMED' &&
+    input.currentState.mode !== 'TRANSFORMING'
+  ) {
+    return target;
+  }
+
+  const progress = Math.max(
+    0,
+    Math.min(
+      1,
+      input.currentState.transformationProgress +
+        Math.max(0, input.deltaSec) / C1_TRANSFORMATION_DURATION_SEC,
+    ),
+  );
+  return {
+    mode: progress >= 1 ? 'TRANSFORMED' : 'TRANSFORMING',
+    transformationProgress: progress,
+    isAcceptedRevision: target.isAcceptedRevision,
+  };
 }
 
 export function derivePieceVisualDescriptor(input: {

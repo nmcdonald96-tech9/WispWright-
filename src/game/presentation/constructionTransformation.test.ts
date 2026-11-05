@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TimberJoint } from '../types';
 import {
+  advanceConstructionTransformationState,
+  C1_TRANSFORMATION_DURATION_SEC,
   deriveConstructionTransformationState,
   derivePieceVisualDescriptor,
   deriveSeamVisualDescriptor,
@@ -139,4 +141,122 @@ test('C1: descriptor derivation does not mutate authoritative joint input', () =
   const descriptor = deriveSeamVisualDescriptor(joint, 0.5);
   assert.equal(JSON.stringify(joint), before);
   assert.equal(descriptor.stressAlpha, 0.8);
+});
+
+
+test('C1 lifecycle: accepted transformation advances deterministically to completion', () => {
+  let state = deriveConstructionTransformationState({
+    phase: 'PLACE_WISPS',
+    acceptedRevisionId: 7,
+    currentConstructionRevision: 7,
+    previousMode: 'PROTOTYPE',
+  });
+  assert.equal(state.mode, 'TRANSFORMING');
+
+  state = advanceConstructionTransformationState({
+    phase: 'PLACE_WISPS',
+    acceptedRevisionId: 7,
+    currentConstructionRevision: 7,
+    currentState: state,
+    deltaSec: C1_TRANSFORMATION_DURATION_SEC / 2,
+  });
+  assert.equal(state.mode, 'TRANSFORMING');
+  assert.ok(Math.abs(state.transformationProgress - 0.5) < 0.0001);
+
+  state = advanceConstructionTransformationState({
+    phase: 'PLACE_WISPS',
+    acceptedRevisionId: 7,
+    currentConstructionRevision: 7,
+    currentState: state,
+    deltaSec: C1_TRANSFORMATION_DURATION_SEC / 2,
+  });
+  assert.deepEqual(state, {
+    mode: 'TRANSFORMED',
+    transformationProgress: 1,
+    isAcceptedRevision: true,
+  });
+});
+
+test('C1 lifecycle: Return to Build immediately restores prototype visuals', () => {
+  const state = advanceConstructionTransformationState({
+    phase: 'CONSTRUCTION',
+    acceptedRevisionId: 7,
+    currentConstructionRevision: 7,
+    currentState: {
+      mode: 'TRANSFORMED',
+      transformationProgress: 1,
+      isAcceptedRevision: true,
+    },
+    deltaSec: 0,
+  });
+  assert.deepEqual(state, {
+    mode: 'PROTOTYPE',
+    transformationProgress: 0,
+    isAcceptedRevision: true,
+  });
+});
+
+test('C1 lifecycle: an edited revision immediately invalidates transformed visuals', () => {
+  const state = advanceConstructionTransformationState({
+    phase: 'PLACE_WISPS',
+    acceptedRevisionId: 7,
+    currentConstructionRevision: 8,
+    currentState: {
+      mode: 'TRANSFORMED',
+      transformationProgress: 1,
+      isAcceptedRevision: true,
+    },
+    deltaSec: 0.1,
+  });
+  assert.deepEqual(state, {
+    mode: 'PROTOTYPE',
+    transformationProgress: 0,
+    isAcceptedRevision: false,
+  });
+});
+
+test('C1 lifecycle: hydrated accepted presentation reconstructs transformed state', () => {
+  const state = deriveConstructionTransformationState({
+    phase: 'PRE_SIEGE_REVIEW',
+    acceptedRevisionId: 12,
+    currentConstructionRevision: 12,
+  });
+  assert.deepEqual(state, {
+    mode: 'TRANSFORMED',
+    transformationProgress: 1,
+    isAcceptedRevision: true,
+  });
+});
+
+test('C1 lifecycle: reinforcement keeps committed construction transformed', () => {
+  const state = advanceConstructionTransformationState({
+    phase: 'REINFORCEMENT_ACTIVE',
+    acceptedRevisionId: 12,
+    currentConstructionRevision: 12,
+    currentState: {
+      mode: 'TRANSFORMED',
+      transformationProgress: 1,
+      isAcceptedRevision: true,
+    },
+    deltaSec: 0.25,
+  });
+  assert.equal(state.mode, 'TRANSFORMED');
+  assert.equal(state.transformationProgress, 1);
+});
+
+test('C1 lifecycle: negative or invalid frame deltas never rewind the reveal', () => {
+  const current = {
+    mode: 'TRANSFORMING' as const,
+    transformationProgress: 0.4,
+    isAcceptedRevision: true,
+  };
+  const state = advanceConstructionTransformationState({
+    phase: 'PLACE_WISPS',
+    acceptedRevisionId: 3,
+    currentConstructionRevision: 3,
+    currentState: current,
+    deltaSec: -1,
+  });
+  assert.equal(state.mode, 'TRANSFORMING');
+  assert.equal(state.transformationProgress, 0.4);
 });
