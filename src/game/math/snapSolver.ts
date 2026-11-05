@@ -3299,6 +3299,89 @@ export function evaluateJointsForPieceTransform(
       continue;
     }
 
+    // Phase B2.2: broad-face seams are continuous finite-face relationships,
+    // not discrete socket-center relationships. Re-evaluate the finalized
+    // transform in place and preserve the original joint identity when valid.
+    if (isBroadFaceTimberJoint(joint)) {
+      const broadFace = solveBroadFaceOverlap(
+        pieceType,
+        position,
+        rotation,
+        partnerPiece,
+        pieceId,
+        {
+          inPlace: true,
+          maxNormalDistancePx: FINALIZED_BROAD_FACE_NORMAL_DISTANCE_PX,
+          minOverlapPx: MIN_BROAD_FACE_OVERLAP_PX,
+          dragIsPrebuilt: selfIsPrebuilt,
+        },
+      );
+      if (!broadFace?.valid) {
+        removedJoints.push(joint);
+        continue;
+      }
+
+      const posA = isPieceA ? position : partnerPiece.position;
+      const rotA = isPieceA ? rotation : partnerPiece.rotation;
+      const posB = isPieceA ? partnerPiece.position : position;
+      const rotB = isPieceA ? partnerPiece.rotation : rotation;
+      const seamWorld = broadFace.worldContactPoint;
+      const localAnchorA = Vec2.rotate(Vec2.sub(seamWorld, posA), -rotA);
+      const localAnchorB = Vec2.rotate(Vec2.sub(seamWorld, posB), -rotB);
+
+      preservedJoints.push({
+        ...joint,
+        connectionSubtype: broadFace.connectionSubtype,
+        materialPairKey: broadFace.materialPairKey,
+        strengthProfile: broadFace.strengthProfile,
+        complianceProfile: broadFace.strengthProfile,
+        localAnchorA: {
+          x: Number(localAnchorA.x.toFixed(3)),
+          y: Number(localAnchorA.y.toFixed(3)),
+        },
+        localAnchorB: {
+          x: Number(localAnchorB.x.toFixed(3)),
+          y: Number(localAnchorB.y.toFixed(3)),
+        },
+        worldPosition: {
+          x: Number(seamWorld.x.toFixed(3)),
+          y: Number(seamWorld.y.toFixed(3)),
+        },
+        restAngle: Number(shortestSignedAngleDelta(rotA, rotB).toFixed(4)),
+        restSeparation: 0,
+        sourceFaceId: isPieceA ? broadFace.sourceFaceId : broadFace.targetFaceId,
+        targetFaceId: isPieceA ? broadFace.targetFaceId : broadFace.sourceFaceId,
+        canonicalRelationship: buildCanonicalRelationship({
+          pieceAId: joint.pieceAId,
+          pieceAType: isPieceA ? pieceType : partnerPiece.type,
+          pieceAPos: posA,
+          pieceARot: rotA,
+          featureAId: isPieceA ? broadFace.sourceFaceId : broadFace.targetFaceId,
+          pieceBId: joint.pieceBId,
+          pieceBType: isPieceA ? partnerPiece.type : pieceType,
+          pieceBPos: posB,
+          pieceBRot: rotB,
+          featureBId: isPieceA ? broadFace.targetFaceId : broadFace.sourceFaceId,
+          connectionTaxonomy: broadFace.taxonomy,
+          jointProfileId: broadFace.strengthProfile,
+        }),
+        closureClassification: classifyArchitecturalClosure({
+          positionMismatchPx: 0,
+          seamGapPx: broadFace.seamSeparation,
+          hasColliderPenetration: false,
+        }),
+        visualJointCapType: getVisualJointCapType(
+          'TIMBER_FACE',
+          broadFace.taxonomy,
+          broadFace.materialPairKey,
+        ),
+        initialPositionalErrorPx: 0,
+        initialAngularErrorRad: 0,
+        initialConstraintEnergy: 0,
+      });
+      continue;
+    }
+
     const mySockId = isPieceA ? joint.socketAId : joint.socketBId;
     const partnerSockId = isPieceA ? joint.socketBId : joint.socketAId;
     const partnerSockets = getPieceSnapSockets(partnerPiece);
@@ -3506,6 +3589,35 @@ export function evaluateJointsForPieceTransform(
         }
       }
     }
+  }
+
+  if (snappingEnabled) {
+    const brokenBroadFaceKeys = new Set(
+      existingJoints
+        .filter(
+          (joint) =>
+            joint.state === 'BROKEN' &&
+            isBroadFaceTimberJoint(joint) &&
+            (joint.pieceAId === pieceId || joint.pieceBId === pieceId),
+        )
+        .map((joint) => getBroadFaceRelationshipKey(joint.pieceAId, joint.pieceBId)),
+    );
+    const broadFaceProposals = discoverSecondaryBroadFaceSeams({
+      activePieceId: pieceId,
+      activeType: pieceType,
+      finalizedPos: position,
+      finalizedRot: rotation,
+      activeIsPrebuilt: selfIsPrebuilt,
+      validPieces,
+      proposedTimberJoints: newlyProposedJoints,
+      preservedJoints,
+    }).filter(
+      (proposal) =>
+        !brokenBroadFaceKeys.has(
+          getBroadFaceRelationshipKey(pieceId, proposal.targetPieceId),
+        ),
+    );
+    newlyProposedJoints.push(...broadFaceProposals);
   }
 
   return { preservedJoints, removedJoints, newlyProposedJoints };
