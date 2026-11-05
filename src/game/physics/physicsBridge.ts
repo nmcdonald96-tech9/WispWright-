@@ -638,13 +638,31 @@ export class PhysicsBridge {
     const relVy = bodyA.velocity.y - bodyB.velocity.y;
     const vRel = Math.hypot(relVx, relVy);
 
+    // Preserve authoritative collision location for localized seam shock. Matter may
+    // report more than one support point, so use their deterministic centroid.
+    let impactPoint: Vector2 | undefined;
+    const supports = pair.collision.supports ?? [];
+    if (supports.length > 0) {
+      let x = 0;
+      let y = 0;
+      let count = 0;
+      for (const support of supports) {
+        if (Number.isFinite(support?.x) && Number.isFinite(support?.y)) {
+          x += support.x;
+          y += support.y;
+          count++;
+        }
+      }
+      if (count > 0) impactPoint = { x: x / count, y: y / count };
+    }
+
     if (isPieceA) {
       const pieceIdA = bodyA.label.replace('piece_', '');
       const massB = bodyB.isStatic ? Infinity : bodyB.mass;
       const reducedMass = (bodyA.mass * massB) / (bodyA.mass + massB);
       const restitution = Math.max(bodyA.restitution, bodyB.restitution);
       const impulse = reducedMass * vRel * (1 + restitution);
-      this.applyPieceDamage(pieceIdA, impulse);
+      this.applyPieceDamage(pieceIdA, impulse, impactPoint);
     }
 
     if (isPieceB) {
@@ -653,7 +671,7 @@ export class PhysicsBridge {
       const reducedMass = (bodyB.mass * massA) / (bodyB.mass + massA);
       const restitution = Math.max(bodyA.restitution, bodyB.restitution);
       const impulse = reducedMass * vRel * (1 + restitution);
-      this.applyPieceDamage(pieceIdB, impulse);
+      this.applyPieceDamage(pieceIdB, impulse, impactPoint);
     }
   }
 
@@ -993,7 +1011,7 @@ export class PhysicsBridge {
     return [...this.wispContactEvents];
   }
 
-  private applyPieceDamage(pieceId: string, impulse: number): void {
+  private applyPieceDamage(pieceId: string, impulse: number, impactPoint?: Vector2): void {
     const current = this.pieceConditions.get(pieceId) || { condition: 'INTACT', impactSeverity: 0 };
     if (current.condition === 'LOST') return;
 
@@ -1020,21 +1038,46 @@ export class PhysicsBridge {
     }
 
     // Propagate impact shock to any active TimberJoint connected to this piece.
-    // Note: Timber joints have lower break thresholds than wood_beam bodies, so a joint can
-    // fracture cleanly while both connected beams remain INTACT or CRACKED.
-    for (const [jointId, joint] of this.timberJoints.entries()) {
-      if (joint.state === 'BROKEN') continue;
-      if (joint.pieceAId !== pieceId && joint.pieceBId !== pieceId) continue;
+    // When collision location is available, preserve full shock at the nearest seam and
+    // attenuate only the additional distance to farther seams. A single seam, centered
+    // impact, or missing location therefore retains legacy full-strength behavior.
+    const connectedJoints = [...this.timberJoints.entries()].filter(
+      ([, joint]) =>
+        joint.state !== 'BROKEN' &&
+        (joint.pieceAId === pieceId || joint.pieceBId === pieceId),
+    );
+    const distanceByJointId = new Map<string, number>();
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    if (impactPoint) {
+      for (const [jointId, joint] of connectedJoints) {
+        const distance = Vec2.distance(impactPoint, joint.worldPosition);
+        distanceByJointId.set(jointId, distance);
+        nearestDistance = Math.min(nearestDistance, distance);
+      }
+    }
+
+    // Two construction units keep nearby seams strongly coupled while allowing a
+    // meaningfully distant support to remain independent. This changes propagation only,
+    // not the existing material or joint strength profiles.
+    const IMPACT_SHOCK_FALLOFF_PX = 96;
+    for (const [jointId, joint] of connectedJoints) {
+      const distance = distanceByJointId.get(jointId);
+      const extraDistance =
+        distance !== undefined && Number.isFinite(nearestDistance)
+          ? Math.max(0, distance - nearestDistance)
+          : 0;
+      const shockWeight = 1 / (1 + extraDistance / IMPACT_SHOCK_FALLOFF_PX);
+      const jointImpulse = impulse * shockWeight;
 
       const profile =
         TIMBER_JOINT_PROFILES[joint.strengthProfile] ??
         TIMBER_JOINT_PROFILES.standard_timber_joint;
       if (newCondition === 'BROKEN') {
         this.breakTimberJoint(jointId, 'CONNECTED_PIECE_BROKEN');
-      } else if (impulse >= profile.breakImpulseThreshold) {
+      } else if (jointImpulse >= profile.breakImpulseThreshold) {
         this.breakTimberJoint(jointId, 'DIRECT_IMPACT_IMPULSE');
-      } else if (impulse >= profile.breakImpulseThreshold * 0.42) {
-        const shockStress = (impulse / profile.breakImpulseThreshold) * 11.5;
+      } else if (jointImpulse >= profile.breakImpulseThreshold * 0.42) {
+        const shockStress = (jointImpulse / profile.breakImpulseThreshold) * 11.5;
         joint.currentStress += shockStress;
         joint.maxStressObserved = Math.max(joint.maxStressObserved, joint.currentStress);
         if (joint.currentStress >= profile.accumulatedStressThreshold) {
