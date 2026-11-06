@@ -31,6 +31,8 @@ import {
   deriveConstructionTransformationState,
 } from './constructionTransformation';
 import { deriveIncomingWispWarning } from './wispIncomingWarning';
+import { deriveFlightPresentationBlend, FlightPresentationBlend } from './flightPresentationBlend';
+import { advanceWispEmoteReadability, createWispEmoteReadabilityState, WispEmoteReadabilityState } from './wispEmoteReadability';
 import { deriveHeavyAttackerSequence } from './heavyAttackerSequence';
 import { deriveStandardAttackerSequence } from './standardAttackerSequence';
 import {
@@ -101,6 +103,7 @@ export class PresentationDirector {
   public heavyAttackerState: HeavyAttackerAnimState = 'HEAVY_IDLE';
   public launcherStrain = 0;
   public heavyAttackerBeatProgress = 1;
+  public flightPresentationBlend: FlightPresentationBlend = deriveFlightPresentationBlend({ projectileVelocityY: 0, distanceToTargetPx: 500, deltaSec: 0, reducedMotion: false });
   public activeCaption: string | null = null;
   private captionTimer = 0;
 
@@ -110,6 +113,7 @@ export class PresentationDirector {
   private wispDispersalCompleted: Set<string> = new Set();
   private wispNearMissTrackers: Map<string, WispNearMissTrackerState> = new Map();
   private wispImpactReactionStates: Map<string, WispImpactReactionState> = new Map();
+  private wispEmoteReadabilityStates: Map<string, WispEmoteReadabilityState> = new Map();
   private ignoredWispContactEventIds: Set<string> = new Set();
 
   // Cosmetic particles
@@ -578,6 +582,7 @@ export class PresentationDirector {
       this.firedAttackEvents.clear();
       this.wispNearMissTrackers.clear();
       this.wispImpactReactionStates.clear();
+      this.wispEmoteReadabilityStates.clear();
       this.ignoredWispContactEventIds = new Set(
         activeBridge?.getWispContactEvents().map((event) => event.id) ?? [],
       );
@@ -594,6 +599,7 @@ export class PresentationDirector {
       this.wispDispersalCompleted.clear();
       this.wispNearMissTrackers.clear();
       this.wispImpactReactionStates.clear();
+      this.wispEmoteReadabilityStates.clear();
       this.ignoredWispContactEventIds.clear();
       this.povTransformBuffer = [];
       this.actualCutReason = null;
@@ -1132,6 +1138,20 @@ export class PresentationDirector {
     }
 
     const isHeavy = siege.currentAttack?.attackerType === 'heavy';
+    if (effectiveMode === 'PROJECTILE_IN_FLIGHT') {
+      const projectile = activeBridge?.getActiveProjectile();
+      const target = siege.currentTarget?.position ?? null;
+      const distance = projectile && target
+        ? Math.hypot(projectile.position.x - target.x, projectile.position.y - target.y)
+        : null;
+      this.flightPresentationBlend = deriveFlightPresentationBlend({
+        projectileVelocityY: projectile?.velocity.y ?? null,
+        distanceToTargetPx: distance,
+        previousApexBlend: this.flightPresentationBlend.apexWeight,
+        deltaSec: 1 / 60,
+        reducedMotion: this.settings.reducedMotion,
+      });
+    }
 
     if (isHeavy) {
       const activeProjectile = activeBridge?.getActiveProjectile();
@@ -1504,9 +1524,22 @@ export class PresentationDirector {
         }
       }
 
+      const readability = advanceWispEmoteReadability({
+        state: this.wispEmoteReadabilityStates.get(wisp.id) ?? createWispEmoteReadabilityState(),
+        requestedReaction: state,
+        deltaSec: dt,
+        isDispersed: false,
+        celebrationActive: celebrationIsActive,
+        terminalOutcomeActive:
+          effectiveMode === 'SEQUENCE_COMPLETE' ||
+          effectiveMode === 'RESULTS' ||
+          effectiveMode === 'UNLOCK_PRESENTATION',
+        reducedMotion: this.settings.reducedMotion,
+      });
+      this.wispEmoteReadabilityStates.set(wisp.id, readability);
+      state = readability.displayedReaction;
       const blinkPhase = Math.sin(timeSec * 3.5 + i * 2.1) > 0.96 ? 1 : 0;
       const celebrationSurvivorIndex = survivorIndexById.get(wisp.id);
-
       this.wispStates.set(wisp.id, {
         wispId: wisp.id,
         isHero: meta.isHero,
@@ -1515,6 +1548,7 @@ export class PresentationDirector {
         dispersalProgress: 0,
         lookTarget,
         blinkPhase,
+        transitionProgress: readability.transitionProgress,
         celebrationElapsedSec:
           celebrationIsActive && celebrationSurvivorIndex !== undefined
             ? siege.finalWispCelebration.elapsedSec

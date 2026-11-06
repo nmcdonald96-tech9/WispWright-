@@ -803,6 +803,7 @@ export class CanvasRenderer {
         pres.standardAttackerState,
         pres.heavyAttackerState,
         reducedMotion,
+        pres.flightPresentationBlend,
       );
     } else if (
       pres.devPreviewType === 'STANDARD_FLIGHT' ||
@@ -824,6 +825,7 @@ export class CanvasRenderer {
         pres.standardAttackerState,
         pres.heavyAttackerState,
         reducedMotion,
+        pres.flightPresentationBlend,
       );
     }
 

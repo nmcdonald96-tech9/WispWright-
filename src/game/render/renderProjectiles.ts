@@ -4,6 +4,7 @@
  */
 
 import { MATERIAL_CONFIGS } from '../config';
+import { FlightPresentationBlend } from '../presentation/flightPresentationBlend';
 import {
   GromRigPose,
   HeavyAttackerAnimState,
@@ -196,6 +197,7 @@ export function renderProjectile(
   standardState: StandardAttackerAnimState = 'FLIGHT_CONFIDENT',
   heavyState: HeavyAttackerAnimState = 'HEAVY_FLIGHT_MOMENTUM',
   reducedMotion = false,
+  flightBlend?: FlightPresentationBlend,
 ): void {
   const isHeavy = attack.attackerType === 'heavy';
   const speed = Math.hypot(velocity.x, velocity.y);
@@ -210,7 +212,7 @@ export function renderProjectile(
   if (effectiveSpeed > 35 && !reducedMotion) {
     ctx.save();
     ctx.rotate(angle);
-    const tailLen = Math.min(105, effectiveSpeed * 0.24);
+    const tailLen = Math.min(105, effectiveSpeed * 0.24) * (flightBlend?.trailScale ?? 1);
 
     const trailGrad = ctx.createLinearGradient(0, 0, -tailLen, 0);
     if (isHeavy) {
@@ -255,7 +257,7 @@ export function renderProjectile(
 
   // 2. Render Character Rig (Visual-only squash & stretch; never changes physics radius)
   ctx.save();
-  ctx.rotate(angle * 0.22);
+  ctx.rotate(flightBlend?.visualPitchRad ?? angle * 0.22);
 
   if (isHeavy) {
     renderGromSlagBruteBody(ctx, radius, animTime, heavyState, velocity, reducedMotion);

@@ -233,6 +233,7 @@ export interface WispPresentationData {
   dispersalProgress: number; // 0 to 1
   lookTarget: Vector2 | null;
   blinkPhase: number;
+  transitionProgress?: number;
   celebrationElapsedSec?: number;
   celebrationSurvivorIndex?: number;
   celebrationSurvivorCount?: number;

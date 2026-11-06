@@ -73,14 +73,16 @@ export function renderWisps(
       bodyScale = celebrationPose.scale;
       celebrationGlowMultiplier = celebrationPose.glowMultiplier;
     } else if (!reducedMotion) {
+      const reactionEaseRaw = Math.max(0, Math.min(1, pres?.transitionProgress ?? 1));
+      const reactionEase = reactionEaseRaw * reactionEaseRaw * (3 - 2 * reactionEaseRaw);
       if (reaction === 'STARTLED_JUMP') {
-        bobY -= Math.abs(Math.sin(animTime * 11 + index)) * 9;
+        bobY -= Math.abs(Math.sin(animTime * 11 + index)) * 9 * reactionEase;
       } else if (reaction === 'COWER' || reaction === 'BRACE_FOR_IMPACT') {
-        bobY += 4;
-        swayX += Math.sin(animTime * 28) * 1.4;
+        bobY += 4 * reactionEase;
+        swayX += Math.sin(animTime * 28) * 1.4 * reactionEase;
       } else if (reaction === 'DODGE_LEAN') {
-        swayX += 6;
-        bodyTilt = 0.22;
+        swayX += 6 * reactionEase;
+        bodyTilt = 0.22 * reactionEase;
       }
     }
 
