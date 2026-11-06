@@ -76,7 +76,7 @@ export const AUTHORED_ATTACKS: AuthoredAttack[] = [
     title: 'The Alchemical Juggernaut',
     personalityTag: 'Massive · Relentless',
     introQuote: 'Pyrite makes sparks. Grom brings GRAVITY!',
-    introDurationSec: 2.5,
+    introDurationSec: 3.4,
     spawnPosition: { x: DISTANCE_PRESETS.STANDARD.launcherX - 5, y: DISTANCE_PRESETS.STANDARD.launcherY + 10 },
     launchVelocity: { x: 13.5, y: -5.2 }, // Physically updated by targeting solver
     mass: 10.5, // ~3.8x mass of standard attacker

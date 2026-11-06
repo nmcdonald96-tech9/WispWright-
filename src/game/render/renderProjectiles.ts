@@ -43,7 +43,9 @@ export function computeGromRigPose(
     state === 'RELEASE_SURPRISE' ||
     state === 'HEAVY_FLIGHT_MOMENTUM' ||
     state === 'AIRBORNE_DELIGHT' ||
-    state === 'HEAVY_IMPACT_BRACE'
+    state === 'HEAVY_IMPACT_BRACE' ||
+    state === 'LAUNCHER_CREAK_LOAD' ||
+    state === 'HEAVY_READY_POSE'
   ) {
     facing = 'SIDE';
   }
@@ -52,9 +54,21 @@ export function computeGromRigPose(
   let squashX = 1.0;
   let squashY = 1.0;
   if (!reducedMotion) {
-    if (state === 'GROUND_THUMP') {
+    if (state === 'HEAVY_STEP_IN') {
+      squashX = 0.98;
+      squashY = 1.02;
+    } else if (state === 'GROUND_THUMP') {
       squashX = 1.12;
       squashY = 0.89;
+    } else if (state === 'LAUNCHER_CREAK_LOAD') {
+      squashX = 0.95;
+      squashY = 1.05;
+    } else if (state === 'ASSISTED_MOUNT') {
+      squashX = 0.97;
+      squashY = 1.03;
+    } else if (state === 'HEAVY_READY_POSE') {
+      squashX = 1.02;
+      squashY = 0.98;
     } else if (state === 'DEEP_COMPRESSION' || state === 'LAUNCHER_FULL_STRAIN') {
       squashX = 0.91;
       squashY = 1.09;
@@ -78,7 +92,19 @@ export function computeGromRigPose(
   let eyeOpenRight = 1.0;
   let mouthState: GromRigPose['mouthState'] = 'STOIC';
 
-  if (state === 'RELEASE_SURPRISE') {
+  if (state === 'LAUNCHER_CREAK_LOAD' || state === 'ASSISTED_MOUNT') {
+    browTiltLeft = 0.3;
+    browTiltRight = -0.3;
+    browLiftY = 1.2;
+    eyeOpenLeft = 0.72;
+    eyeOpenRight = 0.72;
+    mouthState = 'GRIT_BRACE';
+  } else if (state === 'HEAVY_READY_POSE') {
+    browTiltLeft = 0.24;
+    browTiltRight = -0.24;
+    eyeOpenLeft = 0.9;
+    eyeOpenRight = 0.9;
+  } else if (state === 'RELEASE_SURPRISE') {
     browTiltLeft = -0.1;
     browTiltRight = 0.1;
     browLiftY = -3.0;

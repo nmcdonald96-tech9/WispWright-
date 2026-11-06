@@ -658,6 +658,12 @@ export class CanvasRenderer {
       pres.devPreviewType === 'STANDARD_INTRO' ||
       pres.devPreviewType === 'HEAVY_INTRO';
 
+    const showStagedAttacker =
+      isIntro ||
+      effectiveMode === 'AIMING_PREVIEW' ||
+      pres.devPreviewType === 'STANDARD_FLIGHT' ||
+      pres.devPreviewType === 'HEAVY_FLIGHT';
+
     const previewAttack =
       pres.devPreviewType === 'HEAVY_INTRO' || pres.devPreviewType === 'HEAVY_FLIGHT'
         ? AUTHORED_ATTACKS[1]
@@ -670,11 +676,13 @@ export class CanvasRenderer {
       previewAttack,
       showTrajectory,
       isIntro,
+      showStagedAttacker,
       this.timeSec,
       this.siegeController.currentTarget,
       pres.standardAttackerState,
       pres.heavyAttackerState,
       pres.launcherStrain,
+      pres.heavyAttackerBeatProgress,
       reducedMotion,
       isDeveloperMode,
     );

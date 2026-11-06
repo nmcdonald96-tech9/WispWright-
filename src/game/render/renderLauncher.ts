@@ -53,11 +53,13 @@ export function renderLauncher(
   currentAttack: AuthoredAttack | null,
   showTrajectory: boolean,
   isIntro: boolean,
+  showStagedAttacker: boolean,
   timeSec: number,
   currentTarget?: TargetCandidate | null,
   standardState: StandardAttackerAnimState = 'IDLE_WAIT',
   heavyState: HeavyAttackerAnimState = 'HEAVY_IDLE',
   launcherStrain = 0,
+  heavyBeatProgress = 1,
   reducedMotion = false,
   isDeveloperMode = false,
 ): void {
@@ -293,8 +295,9 @@ export function renderLauncher(
     ctx.restore();
   }
 
-  // 3. Render Staged Attacker Character in/beside Cradle during Intro & Aiming Preview
-  if ((isIntro || showTrajectory) && currentAttack) {
+  // 3. Render the attacker only after the authoritative introduction begins.
+  // Trajectory preview remains independently visible before final-wave launch.
+  if (showStagedAttacker && currentAttack) {
     ctx.save();
 
     let stageX = pullBackX;
@@ -311,18 +314,42 @@ export function renderLauncher(
         stageY = cradleOffsetY - Math.abs(Math.sin(animTime * 14)) * 14;
       }
     } else {
+      const rawProgress = Math.max(0, Math.min(1, heavyBeatProgress));
+      const easedProgress = reducedMotion
+        ? 1
+        : rawProgress * rawProgress * (3 - 2 * rawProgress);
+      const mix = (from: number, to: number) => from + (to - from) * easedProgress;
+
       if (heavyState === 'HEAVY_STEP_IN') {
-        stageX = -36;
-        stageY = cradleOffsetY + 22;
-      } else if (heavyState === 'GROUND_THUMP' || heavyState === 'BULLSEYE_ACK_DELIGHTED') {
-        stageX = -18;
-        stageY = cradleOffsetY + 16;
+        stageX = mix(-64, -36);
+        stageY = mix(cradleOffsetY + 28, cradleOffsetY + 22);
+        if (!reducedMotion) stageY -= Math.sin(rawProgress * Math.PI * 3) * 2.5;
+      } else if (heavyState === 'GROUND_THUMP') {
+        stageX = mix(-36, -18);
+        stageY = mix(cradleOffsetY + 22, cradleOffsetY + 16);
+        if (!reducedMotion) stageY += Math.sin(rawProgress * Math.PI) * 7;
         // Cosmetic ground-thump dust shockwave ring
-        ctx.strokeStyle = 'rgba(248, 113, 113, 0.55)';
+        ctx.strokeStyle = `rgba(248, 113, 113, ${0.25 + easedProgress * 0.4})`;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.ellipse(-18, -4, 34, 8, 0, 0, Math.PI * 2);
+        ctx.ellipse(-18, -4, 18 + easedProgress * 20, 5 + easedProgress * 4, 0, 0, Math.PI * 2);
         ctx.stroke();
+      } else if (
+        heavyState === 'LAUNCHER_CREAK_LOAD' ||
+        heavyState === 'BULLSEYE_ACK_DELIGHTED'
+      ) {
+        stageX = mix(-18, -8 + pullBackX * 0.25);
+        stageY = mix(cradleOffsetY + 16, cradleOffsetY + 9);
+      } else if (heavyState === 'ASSISTED_MOUNT') {
+        stageX = mix(-8 + pullBackX * 0.25, pullBackX);
+        stageY = mix(cradleOffsetY + 9, cradleOffsetY + pullDownY);
+        if (!reducedMotion) stageY -= Math.sin(rawProgress * Math.PI) * 5;
+      } else if (heavyState === 'HEAVY_READY_POSE') {
+        stageX = pullBackX;
+        stageY = cradleOffsetY + pullDownY;
+        if (!reducedMotion) {
+          stageY -= Math.sin(rawProgress * Math.PI * 2) * (1 - rawProgress) * 3;
+        }
       }
     }
 

@@ -31,6 +31,7 @@ import {
   deriveConstructionTransformationState,
 } from './constructionTransformation';
 import { deriveIncomingWispWarning } from './wispIncomingWarning';
+import { deriveHeavyAttackerSequence } from './heavyAttackerSequence';
 import { deriveStandardAttackerSequence } from './standardAttackerSequence';
 import {
   advanceWispImpactReaction,
@@ -99,6 +100,7 @@ export class PresentationDirector {
   public standardAttackerState: StandardAttackerAnimState = 'IDLE_WAIT';
   public heavyAttackerState: HeavyAttackerAnimState = 'HEAVY_IDLE';
   public launcherStrain = 0;
+  public heavyAttackerBeatProgress = 1;
   public activeCaption: string | null = null;
   private captionTimer = 0;
 
@@ -1130,6 +1132,53 @@ export class PresentationDirector {
     }
 
     const isHeavy = siege.currentAttack?.attackerType === 'heavy';
+
+    if (isHeavy) {
+      const activeProjectile = activeBridge?.getActiveProjectile();
+      const targetPosition = siege.currentTarget?.position ?? null;
+      const distanceToTargetPx =
+        activeProjectile && targetPosition
+          ? Math.hypot(
+              activeProjectile.position.x - targetPosition.x,
+              activeProjectile.position.y - targetPosition.y,
+            )
+          : null;
+      const heavyPhase =
+        effectiveMode === 'ENEMY_INTRODUCTION'
+          ? 'INTRO'
+          : effectiveMode === 'AIMING_PREVIEW' || effectiveMode === 'FINAL_ATTACK_READY'
+            ? 'AIMING'
+            : effectiveMode === 'PROJECTILE_IN_FLIGHT'
+              ? 'FLIGHT'
+              : effectiveMode === 'IMPACT_RESOLUTION'
+                ? 'IMPACT'
+                : effectiveMode === 'SETTLING'
+                  ? 'SETTLING'
+                  : effectiveMode === 'ATTACK_RESOLVED'
+                    ? 'RESOLVED'
+                    : 'IDLE';
+
+      if (heavyPhase !== 'IDLE') {
+        const sequence = deriveHeavyAttackerSequence({
+          phase: heavyPhase,
+          introElapsedSec: siege.introTimer,
+          introDurationSec: siege.currentAttack?.introDurationSec ?? 2.5,
+          aimingElapsedSec: siege.aimingTimer,
+          projectileVelocityY: activeProjectile?.velocity.y ?? null,
+          distanceToTargetPx,
+          brokenPieceCount: activeBridge?.diagnostics.piecesBrokenCount ?? 0,
+          crackedPieceCount: activeBridge?.diagnostics.piecesCrackedCount ?? 0,
+          bullseyeOverrideSelected: Boolean(
+            siege.targetingDiagnostics?.bullseyeOverrideSelected,
+          ),
+          reducedMotion: this.settings.reducedMotion,
+        });
+        this.heavyAttackerState = sequence.state;
+        this.launcherStrain = sequence.launcherStrain;
+        this.heavyAttackerBeatProgress = sequence.beatProgress;
+        return;
+      }
+    }
 
     if (!isHeavy) {
       const activeProjectile = activeBridge?.getActiveProjectile();
