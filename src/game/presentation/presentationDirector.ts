@@ -31,6 +31,11 @@ import {
   deriveConstructionTransformationState,
 } from './constructionTransformation';
 import { deriveIncomingWispWarning } from './wispIncomingWarning';
+import {
+  advanceWispNearMissTracker,
+  createWispNearMissTrackerState,
+  WispNearMissTrackerState,
+} from './wispNearMiss';
 import type { ConstructionTransformationPresentationState } from './constructionTransformation';
 const PRESENTATION_SETTINGS_STORAGE_KEY = 'alchemical_fortress_phase4_presentation_v1';
 
@@ -95,6 +100,8 @@ export class PresentationDirector {
   public wispStates: Map<string, WispPresentationData> = new Map();
   private wispDispersalStartTimes: Map<string, number> = new Map();
   private wispDispersalCompleted: Set<string> = new Set();
+  private wispNearMissTrackers: Map<string, WispNearMissTrackerState> = new Map();
+  private ignoredWispContactEventIds: Set<string> = new Set();
 
   // Cosmetic particles
   public particles: CosmeticParticle[] = [];
@@ -560,6 +567,10 @@ export class PresentationDirector {
     if (siege.currentAttackIndex !== this.trackedAttackIndex && effectiveMode === 'ENEMY_INTRODUCTION') {
       this.trackedAttackIndex = siege.currentAttackIndex;
       this.firedAttackEvents.clear();
+      this.wispNearMissTrackers.clear();
+      this.ignoredWispContactEventIds = new Set(
+        activeBridge?.getWispContactEvents().map((event) => event.id) ?? [],
+      );
       if (siege.currentAttackIndex === 0) {
         this.replayFrames = [];
         this.wispDispersalStartTimes.clear();
@@ -571,6 +582,8 @@ export class PresentationDirector {
       this.firedAttackEvents.clear();
       this.wispDispersalStartTimes.clear();
       this.wispDispersalCompleted.clear();
+      this.wispNearMissTrackers.clear();
+      this.ignoredWispContactEventIds.clear();
       this.povTransformBuffer = [];
       this.actualCutReason = null;
       this.presentationTimeScale = 1.0;
@@ -1197,6 +1210,8 @@ export class PresentationDirector {
   ): void {
     const activeProj = activeBridge?.getActiveProjectile();
     const awakeBodies = activeBridge?.diagnostics.awakeBodyCount ?? 0;
+    const currentWispContactEvents = activeBridge?.getWispContactEvents() ?? [];
+    const projectileHasImpacted = activeBridge?.diagnostics.firstImpactCoordinates != null;
     const survivingWisps = wisps.filter((wisp) => !wisp.isDispersed);
     const survivorIndexById = new Map(
       survivingWisps.map((wisp, index) => [wisp.id, index]),
@@ -1262,8 +1277,38 @@ export class PresentationDirector {
       let state: WispReactionState = 'CALM_IDLE';
       let lookTarget: Vector2 | null = null;
 
-      // Priority 2: Immediate Danger (Incoming Projectile)
-      if (activeProj) {
+      const priorNearMissState =
+        this.wispNearMissTrackers.get(wisp.id) ?? createWispNearMissTrackerState();
+      const wispWasContacted = currentWispContactEvents.some(
+        (event) =>
+          !this.ignoredWispContactEventIds.has(event.id) &&
+          event.wispId === wisp.id &&
+          event.category !== 'COSMETIC_ONLY',
+      );
+      const nearMiss = advanceWispNearMissTracker({
+        state: priorNearMissState,
+        deltaSec: dt,
+        wispPosition: wisp.position,
+        projectilePosition: activeProj?.position ?? null,
+        projectileVelocity: activeProj?.velocity ?? null,
+        projectileHasImpacted,
+        wispWasContacted,
+        wispIsDispersed: false,
+      });
+      this.wispNearMissTrackers.set(wisp.id, nearMiss.state);
+
+      if (nearMiss.confirmedThisFrame) {
+        this.emitEvent('WISP_NEAR_MISS', timeSec, siege.currentAttackIndex, {
+          wispId: wisp.id,
+          position: wisp.position,
+        });
+      }
+
+      // Priority 2: Confirmed safe passage, then immediate incoming danger.
+      if (nearMiss.reactionActive) {
+        state = 'DODGE_LEAN';
+        lookTarget = activeProj?.position ?? null;
+      } else if (activeProj) {
         const warning = deriveIncomingWispWarning({
           wispPosition: wisp.position,
           projectilePosition: activeProj.position,
