@@ -32,6 +32,11 @@ import {
 } from './constructionTransformation';
 import { deriveIncomingWispWarning } from './wispIncomingWarning';
 import {
+  advanceWispImpactReaction,
+  createWispImpactReactionState,
+  WispImpactReactionState,
+} from './wispImpactReaction';
+import {
   advanceWispNearMissTracker,
   createWispNearMissTrackerState,
   WispNearMissTrackerState,
@@ -101,6 +106,7 @@ export class PresentationDirector {
   private wispDispersalStartTimes: Map<string, number> = new Map();
   private wispDispersalCompleted: Set<string> = new Set();
   private wispNearMissTrackers: Map<string, WispNearMissTrackerState> = new Map();
+  private wispImpactReactionStates: Map<string, WispImpactReactionState> = new Map();
   private ignoredWispContactEventIds: Set<string> = new Set();
 
   // Cosmetic particles
@@ -568,6 +574,7 @@ export class PresentationDirector {
       this.trackedAttackIndex = siege.currentAttackIndex;
       this.firedAttackEvents.clear();
       this.wispNearMissTrackers.clear();
+      this.wispImpactReactionStates.clear();
       this.ignoredWispContactEventIds = new Set(
         activeBridge?.getWispContactEvents().map((event) => event.id) ?? [],
       );
@@ -583,6 +590,7 @@ export class PresentationDirector {
       this.wispDispersalStartTimes.clear();
       this.wispDispersalCompleted.clear();
       this.wispNearMissTrackers.clear();
+      this.wispImpactReactionStates.clear();
       this.ignoredWispContactEventIds.clear();
       this.povTransformBuffer = [];
       this.actualCutReason = null;
@@ -1277,9 +1285,28 @@ export class PresentationDirector {
       let state: WispReactionState = 'CALM_IDLE';
       let lookTarget: Vector2 | null = null;
 
+      const relevantContactEvents = currentWispContactEvents.filter(
+        (event) =>
+          !this.ignoredWispContactEventIds.has(event.id) &&
+          event.wispId === wisp.id,
+      );
+      const priorImpactReactionState =
+        this.wispImpactReactionStates.get(wisp.id) ?? createWispImpactReactionState();
+      const impactReaction = advanceWispImpactReaction({
+        state: priorImpactReactionState,
+        deltaSec: dt,
+        tendency: meta.tendency,
+        contactEvents: relevantContactEvents,
+        isDispersed: false,
+        structureIsSettling:
+          effectiveMode === 'IMPACT_RESOLUTION' || effectiveMode === 'SETTLING',
+        structureIsSettled: effectiveMode === 'ATTACK_RESOLVED',
+      });
+      this.wispImpactReactionStates.set(wisp.id, impactReaction.state);
+
       const priorNearMissState =
         this.wispNearMissTrackers.get(wisp.id) ?? createWispNearMissTrackerState();
-      const wispWasContacted = currentWispContactEvents.some(
+      const wispWasContacted = relevantContactEvents.some(
         (event) =>
           !this.ignoredWispContactEventIds.has(event.id) &&
           event.wispId === wisp.id &&
@@ -1304,7 +1331,7 @@ export class PresentationDirector {
         });
       }
 
-      // Priority 2: Confirmed safe passage, then immediate incoming danger.
+      // Priority 2: Confirmed safe passage, immediate danger, then direct-contact recovery.
       if (nearMiss.reactionActive) {
         state = 'DODGE_LEAN';
         lookTarget = activeProj?.position ?? null;
@@ -1317,6 +1344,12 @@ export class PresentationDirector {
         });
         lookTarget = warning.lookTarget;
         state = warning.reactionState;
+      }
+      // Direct contact overrides generic collapse motion, but never final celebration.
+      else if (impactReaction.reactionState && !celebrationIsActive) {
+        state = impactReaction.reactionState;
+        const latestContact = relevantContactEvents[relevantContactEvents.length - 1];
+        lookTarget = latestContact?.contactPoint ?? null;
       }
       // Priority 3: Nearby Collapse or Heavy Debris
       else if (effectiveMode === 'IMPACT_RESOLUTION' || effectiveMode === 'SETTLING') {
