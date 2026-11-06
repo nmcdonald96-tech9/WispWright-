@@ -49,6 +49,8 @@ import {
   shortestSignedAngleDelta,
   validatePieceRotationTransaction,
 } from '../math/snapSolver';
+import { LevelDefinition } from '../siege/levelDefinitions';
+import { resolveRuntimeLevelSelection } from '../siege/runtimeLevelSelection';
 import {
   AuthoritativeTutorialState,
   BullseyeInventoryStatus,
@@ -234,18 +236,32 @@ export class LevelStore {
     }
   }
 
+  public getActiveLevelDefinition(customState?: LevelState): LevelDefinition {
+    const target = customState ?? this.state;
+    return resolveRuntimeLevelSelection(target?.levelId).definition;
+  }
+
   public getLevelConfiguration(): LevelConfiguration {
+    const definition = this.getActiveLevelDefinition();
     const activeCount = this.getRequiredWispCount(this.state);
     const selectedIds =
       this.developerWispCountOverride !== null
         ? getSelectedWispIdsForCount(activeCount)
-        : [...LEVEL_1_CONFIG.selectedWispIds];
+        : [...definition.selectedWispIds];
     return {
       ...LEVEL_1_CONFIG,
+      levelId: definition.levelId,
       requiredWispCount: activeCount,
       selectedWispIds: selectedIds,
       minimumStableWispsForCompletion: getMinimumStableWispsForCompletion(activeCount),
       resultBands: buildResultBandsForWispCount(activeCount),
+      attackDefinitions: definition.attacks.map((slot) => slot.authoredAttackId),
+      reinforcementSchedule: {
+        ...LEVEL_1_CONFIG.reinforcementSchedule,
+        afterAttackIndex: definition.reinforcementAfterAttackIndex ?? 0,
+      },
+      startingInventory: { ...definition.startingInventory },
+      prebuiltStructureId: definition.prebuiltStructureId,
     };
   }
 
@@ -459,11 +475,14 @@ export class LevelStore {
       state.developerWispCountOverride <= 5
         ? state.developerWispCountOverride
         : this.developerWispCountOverride;
-    const targetCount = overrideCount ?? LEVEL_1_CONFIG.requiredWispCount;
+    const selection = resolveRuntimeLevelSelection(state.levelId);
+    const definition = selection.definition;
+    state.levelId = selection.resolvedLevelId;
+    const targetCount = overrideCount ?? definition.requiredWispCount;
     const targetIds =
       overrideCount !== null
         ? getSelectedWispIdsForCount(targetCount)
-        : [...LEVEL_1_CONFIG.selectedWispIds];
+        : [...definition.selectedWispIds];
 
     const existingMap = new Map<string, WispEntity>();
     if (Array.isArray(state.wisps)) {
@@ -612,7 +631,10 @@ export class LevelStore {
     state.wisps = migratedWisps;
     state.requiredWispCount = targetCount;
     state.activeWispIds = [...targetIds];
-    state.minimumStableWispsForCompletion = getMinimumStableWispsForCompletion(targetCount);
+    state.minimumStableWispsForCompletion =
+      overrideCount !== null
+        ? getMinimumStableWispsForCompletion(targetCount)
+        : definition.minimumStableWispsForCompletion;
     state.resultBands = buildResultBandsForWispCount(targetCount);
     state.developerWispCountOverride = overrideCount ?? null;
 
@@ -3386,13 +3408,15 @@ export class LevelStore {
     this.isAttemptCompleted = false;
 
     const activeOverride = this.developerWispCountOverride;
-    const activeCount = activeOverride ?? LEVEL_1_CONFIG.requiredWispCount;
+    const definition = resolveRuntimeLevelSelection(this.state?.levelId).definition;
+    const activeCount = activeOverride ?? definition.requiredWispCount;
     const selectedIds =
       activeOverride !== null
         ? getSelectedWispIdsForCount(activeCount)
-        : [...LEVEL_1_CONFIG.selectedWispIds];
+        : [...definition.selectedWispIds];
 
     const freshState = deepClone(INITIAL_LEVEL_STATE);
+    freshState.levelId = definition.levelId;
     freshState.attemptId = this.activeAttemptId;
     freshState.resetGeneration = this.resetGeneration;
     freshState.wisps = createWispsForConfiguration(selectedIds);
@@ -3411,10 +3435,13 @@ export class LevelStore {
       isPrebuilt: true,
     }));
     freshState.joints = [];
-    freshState.inventory = { ...INITIAL_LEVEL_STATE.inventory };
+    freshState.inventory = { ...definition.startingInventory };
     freshState.requiredWispCount = activeCount;
     freshState.activeWispIds = [...selectedIds];
-    freshState.minimumStableWispsForCompletion = getMinimumStableWispsForCompletion(activeCount);
+    freshState.minimumStableWispsForCompletion =
+      activeOverride !== null
+        ? getMinimumStableWispsForCompletion(activeCount)
+        : definition.minimumStableWispsForCompletion;
     freshState.resultBands = buildResultBandsForWispCount(activeCount);
     freshState.developerWispCountOverride = activeOverride;
     freshState.snapshotMetadata = this.buildSnapshotWispMetadata(freshState);

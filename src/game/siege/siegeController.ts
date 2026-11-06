@@ -26,7 +26,8 @@ import {
   WispContactEvent,
   WispShelterStatus,
 } from '../types';
-import { AUTHORED_ATTACKS, DistancePreset, DISTANCE_PRESETS } from './siegeConfig';
+import { DistancePreset, DISTANCE_PRESETS } from './siegeConfig';
+import { ResolvedLevelAttack, resolveLevelAttackSequence } from './runtimeLevelSelection';
 import {
   advancePostImpactResolution,
   createPostImpactResolutionState,
@@ -53,6 +54,9 @@ export class SiegeController {
   public mode: GameMode = 'CONSTRUCTION';
   public currentAttackIndex = 0;
   public currentAttack: AuthoredAttack | null = null;
+  public currentAttackSequenceId: string | null = null;
+  public readonly attackSequence: readonly ResolvedLevelAttack[];
+  public readonly reinforcementAfterAttackIndex: number;
   public distancePreset: DistancePreset = 'STANDARD';
   public outcomes: AttackOutcome[] = [];
   public siegeSummary: SiegeSummary | null = null;
@@ -115,6 +119,9 @@ export class SiegeController {
   constructor(store: LevelStore, onStateChange?: () => void) {
     this.store = store;
     this.onStateChange = onStateChange;
+    const definition = this.store.getActiveLevelDefinition();
+    this.attackSequence = resolveLevelAttackSequence(definition);
+    this.reinforcementAfterAttackIndex = definition.reinforcementAfterAttackIndex ?? -1;
     this.constructionTelemetry = this.buildLiveConstructionTelemetry();
     this.loadBalanceTelemetryHistory();
   }
@@ -385,6 +392,24 @@ export class SiegeController {
     this.onStateChange?.();
   }
 
+  private createAttackForSequenceIndex(index: number): AuthoredAttack {
+    const entry = this.attackSequence[index];
+    if (!entry) {
+      throw new Error(`Missing attack sequence entry at index ${index}`);
+    }
+    const presetCfg = DISTANCE_PRESETS[this.distancePreset];
+    const isHeavy = entry.attack.attackerType === 'heavy';
+    this.currentAttackSequenceId = entry.sequenceId;
+    return {
+      ...entry.attack,
+      spawnPosition: {
+        x: presetCfg.launcherX - (isHeavy ? 5 : 0),
+        y: presetCfg.launcherY + (isHeavy ? 10 : 0),
+      },
+      launchVelocity: { ...entry.attack.launchVelocity },
+    };
+  }
+
   public getAttacksRemaining(): number {
     if (
       this.mode === 'REINFORCEMENT_INTRO' ||
@@ -402,7 +427,7 @@ export class SiegeController {
     ) {
       return 0;
     }
-    return Math.max(0, AUTHORED_ATTACKS.length - (this.currentAttackIndex + 1));
+    return Math.max(0, this.attackSequence.length - (this.currentAttackIndex + 1));
   }
 
   // --- Opening Sequence (Skippable) ---
@@ -419,11 +444,7 @@ export class SiegeController {
     } else if (this.mode === 'WISP_INTRO') {
       this.mode = 'THREAT_PREVIEW';
       // Preview Attack 1 trajectory during THREAT_PREVIEW
-      const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-      this.currentAttack = {
-        ...AUTHORED_ATTACKS[0],
-        spawnPosition: { x: presetCfg.launcherX, y: presetCfg.launcherY },
-      };
+      this.currentAttack = this.createAttackForSequenceIndex(0);
       this.computeCurrentAttackTargeting(this.store.getState());
     } else if (this.mode === 'THREAT_PREVIEW') {
       this.mode = 'CONSTRUCTION';
@@ -544,11 +565,7 @@ export class SiegeController {
 
     // 5. Initialize siege run with current distance preset
     this.currentAttackIndex = 0;
-    const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-    this.currentAttack = {
-      ...AUTHORED_ATTACKS[0],
-      spawnPosition: { x: presetCfg.launcherX, y: presetCfg.launcherY },
-    };
+    this.currentAttack = this.createAttackForSequenceIndex(0);
     this.outcomes = [];
     this.finalWispCelebration = createFinalWispCelebrationState();
     this.siegeSummary = null;
@@ -734,11 +751,8 @@ export class SiegeController {
     this.reinforcementElapsedSec = 0;
 
     // Preview Heavy Attack 2 target on current damaged structure
-    const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-    this.currentAttack = {
-      ...AUTHORED_ATTACKS[1],
-      spawnPosition: { x: presetCfg.launcherX - 5, y: presetCfg.launcherY + 10 },
-    };
+    this.currentAttackIndex = this.reinforcementAfterAttackIndex + 1;
+    this.currentAttack = this.createAttackForSequenceIndex(this.currentAttackIndex);
     this.computeCurrentAttackTargeting(this.store.getState());
 
     this.mode = 'REINFORCEMENT_INTRO';
@@ -830,11 +844,8 @@ export class SiegeController {
 
     // 4. Prepare Heavy Attack 2 and dynamically retarget on the reinforced structure
     this.currentAttackIndex = 1;
-    const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-    this.currentAttack = {
-      ...AUTHORED_ATTACKS[1],
-      spawnPosition: { x: presetCfg.launcherX - 5, y: presetCfg.launcherY + 10 },
-    };
+    this.currentAttackIndex = this.reinforcementAfterAttackIndex + 1;
+    this.currentAttack = this.createAttackForSequenceIndex(this.currentAttackIndex);
     this.computeCurrentAttackTargeting(state);
 
     this.mode = 'FINAL_ATTACK_READY';
@@ -858,11 +869,8 @@ export class SiegeController {
     this.physicsBridge = new PhysicsBridge(state);
 
     this.currentAttackIndex = 1;
-    const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-    this.currentAttack = {
-      ...AUTHORED_ATTACKS[1],
-      spawnPosition: { x: presetCfg.launcherX - 5, y: presetCfg.launcherY + 10 },
-    };
+    this.currentAttackIndex = this.reinforcementAfterAttackIndex + 1;
+    this.currentAttack = this.createAttackForSequenceIndex(this.currentAttackIndex);
     this.introTimer = 0;
     this.mode = 'ENEMY_INTRODUCTION';
     this.store.setSavedPhase('ENEMY_INTRODUCTION');
@@ -995,7 +1003,7 @@ export class SiegeController {
         const report = this.physicsBridge.getStabilityReport(dt);
         const brokenJointCount = this.physicsBridge.diagnostics.brokenTimberJointCount;
         const timing = getPostImpactResolutionTiming(
-          this.currentAttackIndex === AUTHORED_ATTACKS.length - 1,
+          this.currentAttackIndex === this.attackSequence.length - 1,
         );
         this.postImpactResolution = advancePostImpactResolution({
           state: this.postImpactResolution,
@@ -1013,7 +1021,7 @@ export class SiegeController {
 
       case 'ATTACK_RESOLVED': {
         this.intermissionTimer += dt;
-        const isFinalAttack = this.currentAttackIndex === AUTHORED_ATTACKS.length - 1;
+        const isFinalAttack = this.currentAttackIndex === this.attackSequence.length - 1;
         if (isFinalAttack && this.finalWispCelebration.phase !== 'INACTIVE') {
           this.finalWispCelebration = advanceFinalWispCelebration(
             this.finalWispCelebration,
@@ -1171,7 +1179,7 @@ export class SiegeController {
     }
 
     this.intermissionTimer = 0;
-    const isFinalAttack = this.currentAttackIndex === AUTHORED_ATTACKS.length - 1;
+    const isFinalAttack = this.currentAttackIndex === this.attackSequence.length - 1;
     this.finalWispCelebration = isFinalAttack
       ? startFinalWispCelebration(stableNow, state.wisps.length)
       : createFinalWispCelebrationState();
@@ -1181,13 +1189,9 @@ export class SiegeController {
   }
 
   private advanceToNextAttackOrFinish(): void {
-    if (this.currentAttackIndex < AUTHORED_ATTACKS.length - 1) {
+    if (this.currentAttackIndex < this.attackSequence.length - 1) {
       this.currentAttackIndex++;
-      const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-      this.currentAttack = {
-        ...AUTHORED_ATTACKS[this.currentAttackIndex],
-        spawnPosition: { x: presetCfg.launcherX - 5, y: presetCfg.launcherY + 10 },
-      };
+      this.currentAttack = this.createAttackForSequenceIndex(this.currentAttackIndex);
       this.computeCurrentAttackTargeting(this.store.getState());
       this.introTimer = 0;
       this.mode = 'ENEMY_INTRODUCTION';
@@ -1705,17 +1709,12 @@ export class SiegeController {
   }
 
   private refreshPreviewTargeting(): void {
-    const presetCfg = DISTANCE_PRESETS[this.distancePreset];
     if (!this.currentAttack) {
-      const idx = this.store.isReinforcementMode ? 1 : 0;
-      const isHeavy = idx === 1;
-      this.currentAttack = {
-        ...AUTHORED_ATTACKS[idx],
-        spawnPosition: {
-          x: presetCfg.launcherX - (isHeavy ? 5 : 0),
-          y: presetCfg.launcherY + (isHeavy ? 10 : 0),
-        },
-      };
+      const idx = this.store.isReinforcementMode
+        ? this.reinforcementAfterAttackIndex + 1
+        : 0;
+      this.currentAttackIndex = idx;
+      this.currentAttack = this.createAttackForSequenceIndex(idx);
     }
     this.computeCurrentAttackTargeting(this.store.getState());
   }
@@ -1752,20 +1751,13 @@ export class SiegeController {
     } else if (result.recoveredPhase === 'REINFORCEMENT_ACTIVE') {
       this.mode = 'REINFORCEMENT_ACTIVE';
       this.reinforcementTimerPaused = false;
-      const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-      this.currentAttack = {
-        ...AUTHORED_ATTACKS[1],
-        spawnPosition: { x: presetCfg.launcherX - 5, y: presetCfg.launcherY + 10 },
-      };
+      this.currentAttackIndex = this.reinforcementAfterAttackIndex + 1;
+      this.currentAttack = this.createAttackForSequenceIndex(this.currentAttackIndex);
       this.computeCurrentAttackTargeting(this.store.getState());
     } else if (result.recoveredPhase === 'FINAL_ATTACK_READY') {
       this.mode = 'FINAL_ATTACK_READY';
-      this.currentAttackIndex = 1;
-      const presetCfg = DISTANCE_PRESETS[this.distancePreset];
-      this.currentAttack = {
-        ...AUTHORED_ATTACKS[1],
-        spawnPosition: { x: presetCfg.launcherX - 5, y: presetCfg.launcherY + 10 },
-      };
+      this.currentAttackIndex = this.reinforcementAfterAttackIndex + 1;
+      this.currentAttack = this.createAttackForSequenceIndex(this.currentAttackIndex);
       this.computeCurrentAttackTargeting(this.store.getState());
     } else if (result.recoveredPhase === 'RESULTS') {
       this.mode = 'RESULTS';
