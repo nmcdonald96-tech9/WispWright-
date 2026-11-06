@@ -30,6 +30,7 @@ export interface LevelDefinition {
   terrainProfileId: TerrainProfileId;
   prebuiltStructureId: string;
   tutorialEnabled: boolean;
+  environmentNativeConstruction?: boolean;
 }
 
 export interface LevelDefinitionValidation {
@@ -70,6 +71,7 @@ export const LEVEL_1_DEFINITION: LevelDefinition = {
   terrainProfileId: 'FLAT_SANCTUARY',
   prebuiltStructureId: LEVEL_1_CONFIG.prebuiltStructureId,
   tutorialEnabled: true,
+  environmentNativeConstruction: false,
 };
 
 export const LEVEL_2_DEFINITION: LevelDefinition = {
@@ -103,6 +105,7 @@ export const LEVEL_2_DEFINITION: LevelDefinition = {
   terrainProfileId: 'CRAGGY_RIDGE_HIGH_ARC',
   prebuiltStructureId: 'ridge_sanctuary_columns_v1',
   tutorialEnabled: false,
+  environmentNativeConstruction: true,
 };
 
 export const LEVEL_DEFINITIONS: Readonly<Record<LevelId, LevelDefinition>> = {

@@ -566,29 +566,46 @@ export default function App() {
 
   const sc = rendererRef.current?.siegeController;
   const pd = rendererRef.current?.presentationDirector;
-  const authoritativeTutorial = storeRef.current.getAuthoritativeTutorialState(levelState);
-  const tutorialChecklist = storeRef.current.getTutorialChecklist(levelState);
+  const activeLevelDefinition =
+    storeRef.current.getCanonicalLevelDefinition(levelState);
+  const tutorialEnabledForLevel =
+    activeLevelDefinition.tutorialEnabled;
+  const authoritativeTutorial =
+    storeRef.current.getAuthoritativeTutorialState(levelState);
+  const tutorialChecklist =
+    storeRef.current.getTutorialChecklist(levelState);
   const tutorialChecklistReady = Boolean(
-    authoritativeTutorial.siegeEligible || sc?.devBypassTutorialRequirements,
+    !tutorialEnabledForLevel ||
+      authoritativeTutorial.siegeEligible ||
+      sc?.devBypassTutorialRequirements,
   );
   const needsStabilityTest = Boolean(
-    authoritativeTutorial.beamPlaced &&
+    tutorialEnabledForLevel &&
+      authoritativeTutorial.beamPlaced &&
       authoritativeTutorial.blockPlaced &&
       authoritativeTutorial.supportedConnectionCreated &&
       !authoritativeTutorial.stabilityTestPassed,
   );
   const highlightInventoryFocus = Boolean(
-    sc?.checklistHighlightActive &&
-      (!authoritativeTutorial.beamPlaced || !authoritativeTutorial.blockPlaced),
+    tutorialEnabledForLevel &&
+      sc?.checklistHighlightActive &&
+      (!authoritativeTutorial.beamPlaced ||
+        !authoritativeTutorial.blockPlaced),
   );
   const highlightedMaterial: MaterialType | null =
-    authoritativeTutorial.currentHighlightedItemId === 'wood_beam'
-      ? 'wood_beam'
-      : authoritativeTutorial.currentHighlightedItemId === 'wood_block'
-        ? 'wood_block'
-        : null;
+    !tutorialEnabledForLevel
+      ? null
+      : authoritativeTutorial.currentHighlightedItemId ===
+          'wood_beam'
+        ? 'wood_beam'
+        : authoritativeTutorial.currentHighlightedItemId ===
+            'wood_block'
+          ? 'wood_block'
+          : null;
   const guidanceActive = Boolean(
-    !authoritativeTutorial.guidanceSkipped && !authoritativeTutorial.basicLessonComplete,
+    tutorialEnabledForLevel &&
+      !authoritativeTutorial.guidanceSkipped &&
+      !authoritativeTutorial.basicLessonComplete,
   );
   const liveConstructionTelemetry =
     mode === 'CONSTRUCTION' ||
@@ -644,7 +661,11 @@ export default function App() {
         undoCount={undoCount}
         redoCount={redoCount}
         snapping={snapping}
-        highlightSnap={authoritativeTutorial.currentHighlightedItemId === 'snap_toggle'}
+        highlightSnap={
+          tutorialEnabledForLevel &&
+          authoritativeTutorial.currentHighlightedItemId ===
+            'snap_toggle'
+        }
         sampleUnlockActive={storeRef.current.unlockState.reinforcementReserveUnlocked}
         isMuted={presSettings.isMuted}
         onUndo={handleUndo}
@@ -668,6 +689,7 @@ export default function App() {
         statusFeedback={statusFeedback}
         reloadNotice={sc?.reloadNotice ?? null}
         bullseyeNotice={sc?.bullseyeNotice ?? null}
+        tutorialEnabled={tutorialEnabledForLevel}
         tutorialChecklist={tutorialChecklist}
         authoritativeTutorial={authoritativeTutorial}
         checklistHighlightActive={Boolean(sc?.checklistHighlightActive)}
@@ -1045,6 +1067,57 @@ export default function App() {
         onSelectDistancePreset={(preset) => {
           setDistancePreset(preset);
           sc?.setDistancePreset(preset);
+        }}
+        developerPresentationMode={
+          presSettings.presentationMode === 'DEVELOPER'
+        }
+        developerTerrainProfileId={
+          storeRef.current.getActiveTerrainProfile().terrainProfileId
+        }
+        onSetDeveloperTerrainProfile={(profileId) => {
+          const renderer = rendererRef.current;
+          if (!renderer) return;
+
+          renderer.setDeveloperTerrainProfileOverride(
+            profileId === 'FLAT_SANCTUARY'
+              ? null
+              : 'CRAGGY_RIDGE_HIGH_ARC',
+          );
+
+          syncStateFromStore();
+        }}
+        developerEnvironmentLevelActive={
+          levelState.levelId === 'craggy_ridge_02'
+        }
+        onEnterDeveloperEnvironmentLevel={() => {
+          const renderer = rendererRef.current;
+          if (!renderer) return;
+          gestureRef.current?.completeOrCancelActiveDragSafely();
+          renderer.prepareForDeveloperLevelStateSwitch();
+          storeRef.current.activateDeveloperLevelState('craggy_ridge_02');
+          renderer.setDeveloperTerrainProfileOverride(null);
+          setMode('CONSTRUCTION');
+          setSelectedPiece(null);
+          setStabilityReport((previous) => ({
+            ...previous,
+            isSimulating: false,
+          }));
+          syncStateFromStore();
+        }}
+        onExitDeveloperEnvironmentLevel={() => {
+          const renderer = rendererRef.current;
+          if (!renderer) return;
+          gestureRef.current?.completeOrCancelActiveDragSafely();
+          renderer.prepareForDeveloperLevelStateSwitch();
+          storeRef.current.exitDeveloperLevelState();
+          renderer.setDeveloperTerrainProfileOverride(null);
+          setMode('CONSTRUCTION');
+          setSelectedPiece(null);
+          setStabilityReport((previous) => ({
+            ...previous,
+            isSimulating: false,
+          }));
+          syncStateFromStore();
         }}
         cameraFramingMode={rendererRef.current?.camera.framingMode || 'CONSTRUCTION_CAMERA'}
         actualFlightTime={rendererRef.current

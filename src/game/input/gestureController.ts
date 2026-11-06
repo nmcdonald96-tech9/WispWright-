@@ -414,6 +414,46 @@ export class GestureController {
   // METHOD A: DIRECT DRAG FROM INVENTORY TRAY WITH VISUAL CARD LIFT
   // =========================================================================
 
+  private solveSnapWithCanonicalTerrain(
+    ...args: Parameters<typeof solveSnapAndValidation>
+  ): ReturnType<typeof solveSnapAndValidation> {
+    const snap = solveSnapAndValidation(...args);
+    const [pieceType, , , , , , pieceId] = args;
+    const candidate: PlacedPiece = {
+      id: pieceId ?? 'terrain_preview_candidate',
+      type: pieceType,
+      position: { ...snap.position },
+      rotation: snap.rotation,
+      isPrebuilt: false,
+    };
+    const terrain = this.store.validateConstructionCandidateForPreview(candidate);
+    const conflict = terrain.conflicts[0];
+
+    if (!conflict) {
+      return snap;
+    }
+
+    const terrainLabel =
+      conflict.collisionRole === 'BALLISTIC_OBSTRUCTION'
+        ? 'Craggy Ridge berm'
+        : conflict.collisionRole === 'LEDGE'
+          ? 'sanctuary ledge'
+          : conflict.collisionRole === 'BEDROCK'
+            ? 'sanctuary bedrock'
+            : 'terrain deflector';
+
+    return {
+      ...snap,
+      isValid: false,
+      overlapClassification: 'TERRAIN_CONFLICT',
+      placementRejectionReason: conflict.reason,
+      playerFriendlyRejectionMessage: `Blocked by ${terrainLabel}`,
+      overlapColliderId: conflict.terrainBodyId,
+      penetrationDepth: conflict.overlapDepthPx,
+      lastSnapRejectionReason: 'TERRAIN_CONFLICT',
+    };
+  }
+
   private computeDefaultTrayTopY(): number {
     const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
     return winH - 92;
@@ -657,7 +697,7 @@ export class GestureController {
     const liftedPos = this.renderer.camera.screenToWorld(clientX, screenY, rect);
     this.pointerWorldCoords = liftedPos;
 
-    const snap = solveSnapAndValidation(
+    const snap = this.solveSnapWithCanonicalTerrain(
       type,
       liftedPos,
       this.preferredRotation,
@@ -797,7 +837,7 @@ export class GestureController {
 
     this.pointerWorldCoords = stagingPos;
 
-    const snap = solveSnapAndValidation(
+    const snap = this.solveSnapWithCanonicalTerrain(
       type,
       stagingPos,
       this.preferredRotation,
@@ -969,7 +1009,7 @@ export class GestureController {
     this.candidateCycleIndex = 0;
 
     const drag = this.renderer.dragState;
-    const snap = solveSnapAndValidation(
+    const snap = this.solveSnapWithCanonicalTerrain(
       drag.pieceType,
       drag.currentWorldPos,
       this.preferredRotation,
@@ -1074,7 +1114,7 @@ export class GestureController {
     this.lockedCandidate = null;
 
     const queryPos = this.pointerWorldCoords ?? drag.currentWorldPos;
-    const snap = solveSnapAndValidation(
+    const snap = this.solveSnapWithCanonicalTerrain(
       drag.pieceType,
       queryPos,
       this.preferredRotation,
@@ -1174,7 +1214,7 @@ export class GestureController {
     this.manualRotationRevision++;
     this.snapRotationAccepted = true;
 
-    const snap = solveSnapAndValidation(
+    const snap = this.solveSnapWithCanonicalTerrain(
       drag.pieceType,
       drag.currentWorldPos,
       this.preferredRotation,
@@ -1346,7 +1386,7 @@ export class GestureController {
       }
 
       // Otherwise reposition ghost to tapped battlefield location
-      const snap = solveSnapAndValidation(
+      const snap = this.solveSnapWithCanonicalTerrain(
         this.tapPlacementMode.pieceType,
         worldPoint,
         this.preferredRotation,
@@ -1685,7 +1725,7 @@ export class GestureController {
       this.pointerWorldCoords = liftedPos;
 
       const piece = this.draggingPlacedPiece;
-      const snap = solveSnapAndValidation(
+      const snap = this.solveSnapWithCanonicalTerrain(
         piece.type,
         liftedPos,
         this.preferredRotation,

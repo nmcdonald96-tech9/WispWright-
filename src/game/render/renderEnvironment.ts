@@ -4,6 +4,7 @@
  */
 
 import { WORLD_CONFIG } from '../config';
+import { TerrainVisualSceneDescriptor } from '../presentation/terrainPresentation';
 import { EnvironmentalAnchor } from '../types';
 
 export function renderEnvironment(
@@ -13,6 +14,7 @@ export function renderEnvironment(
   cameraCenterX = 400,
   reducedMotion = false,
   isDeveloperMode = false,
+  terrainScene?: TerrainVisualSceneDescriptor,
 ): void {
   const { width, height, groundY, buildZone } = WORLD_CONFIG;
   const animTime = reducedMotion ? 0 : timeSec;
@@ -215,7 +217,103 @@ export function renderEnvironment(
   ctx.lineTo(width + 1200, groundY);
   ctx.stroke();
 
-  // 7. Render Environmental Anchors (Bedrock Foundations & Ruin Pillars)
+
+  // 7. Render canonical non-bedrock terrain from the same geometry used by physics.
+  for (const body of terrainScene?.bodies ?? []) {
+    if (body.collisionRole === 'BEDROCK') continue;
+
+    ctx.save();
+    ctx.beginPath();
+    body.worldVertices.forEach((vertex, index) => {
+      if (index === 0) ctx.moveTo(vertex.x, vertex.y);
+      else ctx.lineTo(vertex.x, vertex.y);
+    });
+    ctx.closePath();
+
+    if (body.collisionRole === 'BALLISTIC_OBSTRUCTION') {
+      const ridgeGradient = ctx.createLinearGradient(
+        body.worldBounds.min.x,
+        body.worldBounds.min.y,
+        body.worldBounds.max.x,
+        body.worldBounds.max.y,
+      );
+      ridgeGradient.addColorStop(0, '#6b3f35');
+      ridgeGradient.addColorStop(0.52, '#4a302f');
+      ridgeGradient.addColorStop(1, '#281f29');
+      ctx.fillStyle = ridgeGradient;
+      ctx.strokeStyle = '#9a6755';
+      ctx.lineWidth = 3;
+    } else if (body.collisionRole === 'LEDGE') {
+      ctx.fillStyle = '#5e5368';
+      ctx.strokeStyle = '#9a8aa7';
+      ctx.lineWidth = 2.5;
+    } else {
+      ctx.fillStyle = '#4c415c';
+      ctx.strokeStyle = '#786891';
+      ctx.lineWidth = 2;
+    }
+
+    ctx.fill();
+    ctx.stroke();
+
+    // Contact shadow remains inside the authoritative polygon bounds.
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = 'rgba(14, 11, 18, 0.22)';
+    ctx.fillRect(
+      body.worldBounds.min.x,
+      body.worldBounds.max.y - 18,
+      body.worldBounds.max.x - body.worldBounds.min.x,
+      18,
+    );
+    ctx.restore();
+
+    if (isDeveloperMode) {
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(
+        body.worldBounds.min.x,
+        body.worldBounds.min.y,
+        body.worldBounds.max.x - body.worldBounds.min.x,
+        body.worldBounds.max.y - body.worldBounds.min.y,
+      );
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#67e8f9';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(
+        `${body.id} · ${body.collisionRole}`,
+        body.worldBounds.min.x + 4,
+        body.worldBounds.min.y - 6,
+      );
+      for (const vertex of body.worldVertices) {
+        ctx.beginPath();
+        ctx.arc(vertex.x, vertex.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  }
+
+  if (isDeveloperMode && terrainScene?.paddedCameraEnvelope) {
+    const envelope = terrainScene.paddedCameraEnvelope;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.65)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 6]);
+    ctx.strokeRect(
+      envelope.min.x,
+      envelope.min.y,
+      envelope.max.x - envelope.min.x,
+      envelope.max.y - envelope.min.y,
+    );
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // 8. Render Environmental Anchors (Bedrock Foundations & Ruin Pillars)
   for (const anchor of anchors) {
     ctx.save();
     ctx.translate(anchor.position.x, anchor.position.y);

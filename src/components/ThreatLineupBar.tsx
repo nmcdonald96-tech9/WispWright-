@@ -37,6 +37,7 @@ interface ThreatLineupBarProps {
   statusFeedback: string | null;
   reloadNotice: string | null;
   bullseyeNotice?: string | null;
+  tutorialEnabled?: boolean;
   tutorialChecklist?: TutorialChecklistState;
   authoritativeTutorial?: AuthoritativeTutorialState;
   checklistHighlightActive?: boolean;
@@ -122,6 +123,7 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
   statusFeedback,
   reloadNotice,
   bullseyeNotice,
+  tutorialEnabled = true,
   tutorialChecklist,
   authoritativeTutorial,
   checklistHighlightActive = false,
@@ -286,19 +288,23 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
                 </span>
               </div>
             )}
-            <button
-              onClick={onTriggerTutorialIntro}
-              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-semibold cursor-pointer"
-              title="Replay Level 1 Intro & Threat Preview"
-            >
-              Briefing
-            </button>
+            {tutorialEnabled && (
+              <button
+                onClick={onTriggerTutorialIntro}
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[9px] font-semibold cursor-pointer"
+                title="Replay Level 1 Intro & Threat Preview"
+              >
+                Briefing
+              </button>
+            )}
           </div>
         </div>
       )}
 
       {/* 1A. Sequential Guided Placement Lesson & Compact Mobile Checklist */}
-      {isInitialConstruction && tutorialChecklist && (
+      {tutorialEnabled &&
+        isInitialConstruction &&
+        tutorialChecklist && (
         <div
           className={`pointer-events-auto flex flex-col gap-1 rounded-xl px-2.5 py-1.5 shadow-md backdrop-blur-md border transition-all ${
             checklistHighlightActive && !isLessonComplete
@@ -422,9 +428,10 @@ export const ThreatLineupBar: React.FC<ThreatLineupBarProps> = ({
       )}
 
       {/* 2. Contextual Non-Blocking Tutorial / Crisis / Reinforcement Banner */}
-      {(mode === 'LEVEL_INTRO' ||
-        mode === 'WISP_INTRO' ||
-        mode === 'THREAT_PREVIEW' ||
+      {((tutorialEnabled &&
+          (mode === 'LEVEL_INTRO' ||
+            mode === 'WISP_INTRO' ||
+            mode === 'THREAT_PREVIEW')) ||
         mode === 'REINFORCEMENT_INTRO' ||
         mode === 'EMERGENCY_DELIVERY' ||
         mode === 'FINAL_ATTACK_READY') && (

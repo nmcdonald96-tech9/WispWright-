@@ -71,6 +71,14 @@ interface DiagnosticPanelProps {
   onToggleDevBypassTutorialRequirements?: () => void;
   distancePreset?: DistancePreset;
   onSelectDistancePreset?: (preset: DistancePreset) => void;
+  developerPresentationMode?: boolean;
+  developerTerrainProfileId?: 'FLAT_SANCTUARY' | 'CRAGGY_RIDGE_HIGH_ARC';
+  onSetDeveloperTerrainProfile?: (
+    profileId: 'FLAT_SANCTUARY' | 'CRAGGY_RIDGE_HIGH_ARC',
+  ) => void;
+  developerEnvironmentLevelActive?: boolean;
+  onEnterDeveloperEnvironmentLevel?: () => void;
+  onExitDeveloperEnvironmentLevel?: () => void;
   cameraFramingMode?: string;
   actualFlightTime?: number;
   // Phase 3 Developer Test Controls (9)
@@ -149,6 +157,12 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
   onToggleDevBypassTutorialRequirements,
   distancePreset = 'STANDARD',
   onSelectDistancePreset,
+  developerPresentationMode = false,
+  developerTerrainProfileId = 'FLAT_SANCTUARY',
+  onSetDeveloperTerrainProfile,
+  developerEnvironmentLevelActive = false,
+  onEnterDeveloperEnvironmentLevel,
+  onExitDeveloperEnvironmentLevel,
   cameraFramingMode = 'CONSTRUCTION_CAMERA',
   actualFlightTime,
   onToggleDisableTimer,
@@ -1529,6 +1543,98 @@ export const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({
             })}
           </div>
         </div>
+
+        {/* 6A. Developer-only authoritative terrain preview */}
+        {developerPresentationMode && onSetDeveloperTerrainProfile && (
+          <div className="border-t border-cyan-900/60 pt-1.5">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-1 text-[10px] font-bold text-cyan-300">
+                <Layers className="w-3 h-3 text-cyan-400" />
+                <span>TERRAIN PREVIEW</span>
+              </div>
+              <span className="text-[9px] text-slate-400">
+                Developer only
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1">
+              {(
+                [
+                  ['FLAT_SANCTUARY', 'Flat Sanctuary'],
+                  ['CRAGGY_RIDGE_HIGH_ARC', 'Craggy Ridge'],
+                ] as const
+              ).map(([profileId, label]) => {
+                const isSelected =
+                  developerTerrainProfileId === profileId;
+
+                return (
+                  <button
+                    key={profileId}
+                    type="button"
+                    onClick={() =>
+                      onSetDeveloperTerrainProfile(profileId)
+                    }
+                    className={`py-1 px-1.5 rounded text-center text-[9px] font-bold transition-all cursor-pointer border ${
+                      isSelected
+                        ? 'bg-cyan-700 text-white border-cyan-300 shadow'
+                        : 'bg-slate-900/90 text-slate-300 border-slate-700/60 hover:bg-slate-800'
+                    }`}
+                    title={
+                      profileId === 'FLAT_SANCTUARY'
+                        ? 'Clear the developer override and restore canonical Level 1 terrain'
+                        : 'Preview authoritative Craggy Ridge visual and physics terrain'
+                    }
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-1 text-[8.5px] text-slate-500">
+              Process-local preview. Level identity and saved data remain unchanged.
+            </div>
+          </div>
+        )}
+
+        {/* 6B. Developer-only environment-native authoritative level */}
+        {developerPresentationMode &&
+          onEnterDeveloperEnvironmentLevel &&
+          onExitDeveloperEnvironmentLevel && (
+            <div className="border-t border-emerald-900/60 pt-1.5">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-300">
+                  <Layers className="w-3 h-3 text-emerald-400" />
+                  <span>ENVIRONMENT-NATIVE LEVEL</span>
+                </div>
+                <span className="text-[9px] text-slate-400">
+                  {developerEnvironmentLevelActive ? 'Level 2 active' : 'Level 1 active'}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={
+                  developerEnvironmentLevelActive
+                    ? onExitDeveloperEnvironmentLevel
+                    : onEnterDeveloperEnvironmentLevel
+                }
+                className={`w-full py-1 px-1.5 rounded text-center text-[9px] font-bold cursor-pointer border ${
+                  developerEnvironmentLevelActive
+                    ? 'bg-amber-900/70 text-amber-100 border-amber-500 hover:bg-amber-900'
+                    : 'bg-emerald-800 text-white border-emerald-400 hover:bg-emerald-700'
+                }`}
+              >
+                {developerEnvironmentLevelActive
+                  ? 'Return to preserved Level 1 attempt'
+                  : 'Enter Craggy Ridge Level 2'}
+              </button>
+
+              <div className="mt-1 text-[8.5px] text-slate-500">
+                Authoritative terrain, clean starting state, no ancient blocks. Process-local and unavailable to normal progression.
+              </div>
+            </div>
+          )}
 
         {/* 7. Ballistic Targeting & Phase 5 Bullseye Diagnostics (15 Required Fields) */}
         {targetingDiagnostics && (

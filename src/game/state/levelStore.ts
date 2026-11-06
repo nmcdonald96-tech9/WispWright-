@@ -49,8 +49,18 @@ import {
   shortestSignedAngleDelta,
   validatePieceRotationTransaction,
 } from '../math/snapSolver';
-import { LevelDefinition } from '../siege/levelDefinitions';
+import {
+  getLevelDefinition,
+  LevelDefinition,
+  LevelId,
+  TerrainProfileId,
+} from '../siege/levelDefinitions';
 import { getTerrainProfile, TerrainProfileDefinition } from '../siege/terrainDefinitions';
+import {
+  TerrainPlacementConflict,
+  TerrainPlacementValidationResult,
+  validatePieceAgainstTerrain,
+} from '../siege/environmentNativeTerrain';
 import { resolveRuntimeLevelSelection } from '../siege/runtimeLevelSelection';
 import {
   AuthoritativeTutorialState,
@@ -162,6 +172,9 @@ export class LevelStore {
   } | null = null;
   public lastWispPlacementDiagnostics: WispPlacementDiagnostics | null = null;
   public developerWispCountOverride: number | null = null;
+  public developerTerrainProfileOverride: TerrainProfileId | null = null;
+  public lastTerrainPlacementConflict: TerrainPlacementConflict | null = null;
+  private developerLevelReturnState: LevelState | null = null;
   public activeAttemptId: string = `attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   public resetGeneration: number = 1;
   public isAttemptCompleted: boolean = false;
@@ -242,8 +255,139 @@ export class LevelStore {
     return resolveRuntimeLevelSelection(target?.levelId).definition;
   }
 
-  public getActiveTerrainProfile(customState?: LevelState): TerrainProfileDefinition {
-    return getTerrainProfile(this.getActiveLevelDefinition(customState).terrainProfileId);
+  public getCanonicalLevelDefinition(
+    customState?: LevelState,
+  ): LevelDefinition {
+    if (customState) {
+      return getLevelDefinition(customState.levelId as LevelId);
+    }
+    if (this.developerLevelReturnState) {
+      return getLevelDefinition(this.state.levelId as LevelId);
+    }
+    return this.getActiveLevelDefinition();
+  }
+
+  public getCanonicalTerrainProfile(
+    customState?: LevelState,
+  ): TerrainProfileDefinition {
+    return getTerrainProfile(
+      this.getCanonicalLevelDefinition(customState).terrainProfileId,
+    );
+  }
+
+  public validateConstructionCandidateAgainstTerrain(
+    candidate: PlacedPiece,
+    customState?: LevelState,
+  ): TerrainPlacementValidationResult {
+    return validatePieceAgainstTerrain(
+      candidate,
+      this.getCanonicalTerrainProfile(customState),
+    );
+  }
+
+  public validateConstructionCandidateForPreview(
+    candidate: PlacedPiece,
+  ): TerrainPlacementValidationResult {
+    if (!this.getCanonicalLevelDefinition().environmentNativeConstruction) {
+      return { valid: true, conflicts: [] };
+    }
+    return this.validateConstructionCandidateAgainstTerrain(candidate);
+  }
+
+  private acceptTerrainCandidate(
+    candidate: PlacedPiece,
+  ): boolean {
+    if (!this.getCanonicalLevelDefinition().environmentNativeConstruction) {
+      this.lastTerrainPlacementConflict = null;
+      return true;
+    }
+
+    const result = this.validateConstructionCandidateAgainstTerrain(candidate);
+    this.lastTerrainPlacementConflict = result.conflicts[0] ?? null;
+    if (!result.valid) {
+      this.lastJointEditOutcome = 'REJECTED';
+      this.lastJointRestoreReason = 'TERRAIN_CONFLICT';
+      return false;
+    }
+    return true;
+  }
+
+  public createDeveloperLevelState(
+    levelId: 'craggy_ridge_02',
+  ): LevelState {
+    const definition = getLevelDefinition(levelId);
+    const state = deepClone(INITIAL_LEVEL_STATE);
+
+    state.levelId = definition.levelId;
+    state.pieces = [];
+    state.joints = [];
+    state.anchors = [];
+    state.inventory = { ...definition.startingInventory };
+    state.requiredWispCount = definition.requiredWispCount;
+    state.activeWispIds = [...definition.selectedWispIds];
+    state.minimumStableWispsForCompletion =
+      definition.minimumStableWispsForCompletion;
+    state.resultBands = buildResultBandsForWispCount(
+      definition.requiredWispCount,
+    );
+    state.developerWispCountOverride = null;
+    state.wisps = createWispsForConfiguration([...definition.selectedWispIds]);
+
+    for (const wisp of state.wisps) {
+      wisp.placed = false;
+      wisp.isValid = false;
+      wisp.isDispersed = false;
+      wisp.validationReason = null;
+      wisp.shelterStatus = 'Exposed';
+    }
+
+    state.snapshotMetadata = this.buildSnapshotWispMetadata(state);
+    return state;
+  }
+
+  public activateDeveloperLevelState(
+    levelId: 'craggy_ridge_02',
+  ): void {
+    if (!this.developerLevelReturnState) {
+      this.developerLevelReturnState = deepClone(this.state);
+    }
+    this.state = this.createDeveloperLevelState(levelId);
+    this.lastTerrainPlacementConflict = null;
+    this.listeners.forEach((listener) => listener());
+  }
+
+  public exitDeveloperLevelState(): void {
+    if (!this.developerLevelReturnState) return;
+    this.state = deepClone(this.developerLevelReturnState);
+    this.developerLevelReturnState = null;
+    this.lastTerrainPlacementConflict = null;
+    this.listeners.forEach((listener) => listener());
+  }
+
+  public getActiveTerrainProfile(
+    customState?: LevelState,
+  ): TerrainProfileDefinition {
+    return this.developerTerrainProfileOverride
+      ? getTerrainProfile(this.developerTerrainProfileOverride)
+      : this.getCanonicalTerrainProfile(customState);
+  }
+
+  public setDeveloperTerrainProfileOverride(
+    profileId: TerrainProfileId | null,
+  ): void {
+    if (profileId !== null) {
+      getTerrainProfile(profileId);
+    }
+
+    if (this.developerTerrainProfileOverride === profileId) {
+      return;
+    }
+
+    this.developerTerrainProfileOverride = profileId;
+
+    // Deliberately notify subscribers without saveToStorage() or
+    // saveSessionMeta(). The override must remain process-local.
+    this.listeners.forEach((listener) => listener());
   }
 
   public getLevelConfiguration(): LevelConfiguration {
@@ -975,9 +1119,12 @@ export class LevelStore {
       }
     }
 
-    const currentSuggestedPlacementRegion = this.guidanceSkipped
-      ? null
-      : this.computeSuggestedPlacementRegion(currentGuidedStep, playerPieces);
+    const supportsLevel1Tutorial =
+      target.levelId === 'alchemical_sanctuary_01';
+    const currentSuggestedPlacementRegion =
+      this.guidanceSkipped || !supportsLevel1Tutorial
+        ? null
+        : this.computeSuggestedPlacementRegion(currentGuidedStep, playerPieces);
 
     return {
       tutorialStarted: true,
@@ -997,7 +1144,9 @@ export class LevelStore {
       testedRevisionId: this.testedRevisionId,
       stabilityPassedForRevisionId: this.stabilityPassedForRevisionId,
       acceptedRevisionId: this.acceptedRevisionId,
-      currentHighlightedItemId,
+      currentHighlightedItemId: supportsLevel1Tutorial
+        ? currentHighlightedItemId
+        : null,
       currentSuggestedPlacementRegion,
       lastChecklistRecomputationReason: this.lastChecklistRecomputationReason,
       lastTutorialTransition: this.lastTutorialTransition,
@@ -1622,6 +1771,10 @@ export class LevelStore {
     const currentCount = this.state.inventory[piece.type] ?? 0;
     if (currentCount <= 0) return false;
 
+    if (!this.acceptTerrainCandidate(piece)) {
+      return false;
+    }
+
     // Enforce wisp clearance: committed construction pieces may not overlap placed or reserved wisps
     const pieceOBB = getOBBFromPiece(piece);
     if (checkPieceOverlapsWisps(pieceOBB, this.state.wisps).overlaps) {
@@ -1972,6 +2125,7 @@ export class LevelStore {
     ) {
       this.beamSelectedInInventory = false;
     }
+    this.lastTerrainPlacementConflict = null;
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -2004,6 +2158,15 @@ export class LevelStore {
       typeof newRotationOrAnchor === 'number' ? newRotationOrAnchor : piece.rotation;
     const afterAnchorId =
       typeof newRotationOrAnchor === 'string' ? newRotationOrAnchor : newAnchorId;
+
+    const terrainCandidate: PlacedPiece = {
+      ...deepClone(piece),
+      position: { ...newPos },
+      rotation: afterRot,
+    };
+    if (!this.acceptTerrainCandidate(terrainCandidate)) {
+      return false;
+    }
 
     // Enforce wisp clearance on move
     const cfg = MATERIAL_CONFIGS[piece.type];
@@ -2178,6 +2341,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.lastTerrainPlacementConflict = null;
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -2374,6 +2538,14 @@ export class LevelStore {
     const beforeAnchorId = piece.attachedAnchorId;
     const afterRotation = this.normalizeAngle(beforeRotation + deltaAngle);
 
+    const terrainCandidate: PlacedPiece = {
+      ...deepClone(piece),
+      rotation: afterRotation,
+    };
+    if (!this.acceptTerrainCandidate(terrainCandidate)) {
+      return false;
+    }
+
     const diag = validatePieceRotationTransaction(
       piece,
       afterRotation,
@@ -2458,6 +2630,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.lastTerrainPlacementConflict = null;
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -2473,6 +2646,14 @@ export class LevelStore {
     const beforeRotation = piece.rotation;
     const afterRotation = this.normalizeAngle(targetRotation);
     if (Math.abs(beforeRotation - afterRotation) < 0.001) return false;
+
+    const terrainCandidate: PlacedPiece = {
+      ...deepClone(piece),
+      rotation: afterRotation,
+    };
+    if (!this.acceptTerrainCandidate(terrainCandidate)) {
+      return false;
+    }
 
     const diag = validatePieceRotationTransaction(
       piece,
@@ -2556,6 +2737,7 @@ export class LevelStore {
       this.getActiveRedoStack().length = 0;
     }
 
+    this.lastTerrainPlacementConflict = null;
     this.recomputeAllWispProtection();
     this.notify();
     return true;
@@ -4059,6 +4241,7 @@ export class LevelStore {
       // Ignore
     }
     this.developerWispCountOverride = null;
+    this.developerTerrainProfileOverride = null;
     this.unlockState = {
       tutorialCompleted: false,
       reinforcementReserveUnlocked: false,

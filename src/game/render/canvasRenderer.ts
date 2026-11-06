@@ -7,6 +7,11 @@ import { soundSynth } from '../audio/synth';
 import { Camera } from '../input/camera';
 import { isEditableMode } from '../input/gestureController';
 import { PhysicsBridge } from '../physics/physicsBridge';
+import {
+  deriveTerrainCameraFraming,
+  deriveTerrainVisualScene,
+  TerrainVisualSceneDescriptor,
+} from '../presentation/terrainPresentation';
 import { PresentationDirector } from '../presentation/presentationDirector';
 import { derivePieceVisualDescriptor } from '../presentation/constructionTransformation';
 import { SiegeController } from '../siege/siegeController';
@@ -139,7 +144,10 @@ export class CanvasRenderer {
       if (this.physicsBridge) {
         this.physicsBridge.teardown();
       }
-      this.physicsBridge = new PhysicsBridge(this.store.getState());
+      this.physicsBridge = new PhysicsBridge(
+        this.store.getState(),
+        this.store.getCanonicalTerrainProfile(),
+      );
       soundSynth.playTestStart();
     } else if (mode === 'CONSTRUCTION') {
       const comingFromStabilityTest = this.mode === 'TESTING_SIMULATION';
@@ -153,6 +161,27 @@ export class CanvasRenderer {
       this.store.setSavedPhase('CONSTRUCTION');
       soundSynth.playSnap();
     }
+  }
+
+  public prepareForDeveloperLevelStateSwitch(): void {
+    this.presentationDirector.skipReplay();
+    this.presentationDirector.clearReplayData();
+    this.selectedPieceId = null;
+    this.dragState = null;
+    this.wispDragState = null;
+    this.selectedWispId = null;
+    this.mode = 'CONSTRUCTION';
+
+    if (this.physicsBridge) {
+      this.physicsBridge.teardown();
+      this.physicsBridge = null;
+    }
+    if (this.siegeController.physicsBridge) {
+      this.siegeController.physicsBridge.teardown();
+      this.siegeController.physicsBridge = null;
+    }
+    this.siegeController.mode = 'CONSTRUCTION';
+    this.camera.resetView();
   }
 
   public resetLevel(): void {
@@ -298,6 +327,26 @@ export class CanvasRenderer {
     return bridge?.diagnostics || null;
   }
 
+  public getActiveTerrainVisualSceneForTesting(): TerrainVisualSceneDescriptor {
+    return deriveTerrainVisualScene(this.store.getActiveTerrainProfile());
+  }
+
+  public getActivePhysicsTerrainProfileIdForTesting(): string | null {
+    return this.getActivePhysicsBridge()?.diagnostics.terrainProfileId ?? null;
+  }
+
+  public getActivePhysicsTerrainBodyCountForTesting(): number {
+    return this.getActivePhysicsBridge()?.diagnostics.terrainBodyCount ?? 0;
+  }
+
+  public setDeveloperTerrainProfileOverride(
+    profileId: Parameters<LevelStore['setDeveloperTerrainProfileOverride']>[0],
+  ): void {
+    this.store.setDeveloperTerrainProfileOverride(profileId);
+    this.camera.resetView();
+    this.updateCameraFraming();
+  }
+
   public getPresentationDiagnostics() {
     return this.presentationDirector.getDiagnostics(
       this.getEffectiveMode(),
@@ -419,6 +468,8 @@ export class CanvasRenderer {
     const targetPos = this.siegeController.currentTarget?.position ?? { x: 350, y: 580 };
     const activeProj = this.getActivePhysicsBridge()?.getActiveProjectile();
     const reducedMotion = this.presentationDirector.settings.reducedMotion;
+    const terrainScene = this.getActiveTerrainVisualSceneForTesting();
+    const terrainEnvelope = terrainScene.paddedCameraEnvelope;
 
     switch (camMode) {
       case 'CONSTRUCTION_CAMERA': {
@@ -447,15 +498,36 @@ export class CanvasRenderer {
             break;
           }
         }
-        this.camera.setFraming({ x: 360, y: 555 }, 560, 540, camMode, reducedMotion);
+        const framing = deriveTerrainCameraFraming(
+          { min: { x: 80, y: 285 }, max: { x: 640, y: 825 } },
+          terrainEnvelope,
+        );
+        this.camera.setFraming(
+          framing.center,
+          framing.spanWidth,
+          framing.spanHeight,
+          camMode,
+          reducedMotion,
+        );
         break;
       }
 
       case 'REINFORCEMENT_CAMERA':
-      case 'RESULTS_CAMERA':
-        // Focus tightly on the sanctuary fortress & protected wisps without excessive empty border
-        this.camera.setFraming({ x: 360, y: 555 }, 560, 540, camMode, reducedMotion);
+      case 'RESULTS_CAMERA': {
+        // Focus on the sanctuary while including developer terrain when active.
+        const framing = deriveTerrainCameraFraming(
+          { min: { x: 80, y: 285 }, max: { x: 640, y: 825 } },
+          terrainEnvelope,
+        );
+        this.camera.setFraming(
+          framing.center,
+          framing.spanWidth,
+          framing.spanHeight,
+          camMode,
+          reducedMotion,
+        );
         break;
+      }
 
       case 'THREAT_PREVIEW_CAMERA':
       case 'AIMING_CAMERA': {
@@ -464,8 +536,22 @@ export class CanvasRenderer {
         const maxX = Math.max(targetPos.x + 125, 475);
         const spanW = Math.max(620, maxX - minX);
         const centerX = (minX + maxX) / 2;
-        // Exclude unnecessary empty vertical sky space while keeping ballistic apex & bedrock readable
-        this.camera.setFraming({ x: centerX, y: 565 }, spanW, 480, camMode);
+        const baseBounds = {
+          min: { x: centerX - spanW / 2, y: 325 },
+          max: { x: centerX + spanW / 2, y: 805 },
+        };
+        const framing = deriveTerrainCameraFraming(
+          baseBounds,
+          terrainEnvelope,
+          620,
+          480,
+        );
+        this.camera.setFraming(
+          framing.center,
+          framing.spanWidth,
+          framing.spanHeight,
+          camMode,
+        );
         break;
       }
 
@@ -584,6 +670,7 @@ export class CanvasRenderer {
     const reducedMotion = pres.settings.reducedMotion;
     const isDeveloperMode = pres.settings.presentationMode === 'DEVELOPER';
     const constructionVisual = pres.getConstructionTransformationState();
+    const terrainVisualScene = this.getActiveTerrainVisualSceneForTesting();
 
     ctx.clearRect(0, 0, camera.viewWidth, camera.viewHeight);
 
@@ -631,6 +718,7 @@ export class CanvasRenderer {
       camera.currentCenter.x,
       reducedMotion,
       isDeveloperMode,
+      terrainVisualScene,
     );
 
     // 2. Check if Read-Only Visual Replay is active
