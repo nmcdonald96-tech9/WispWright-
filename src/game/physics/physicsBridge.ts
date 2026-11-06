@@ -11,7 +11,9 @@ import { DAMAGE_THRESHOLDS } from '../siege/siegeConfig';
 import {
   FLAT_SANCTUARY_TERRAIN,
   TerrainBodyDefinition,
+  TerrainCollisionRole,
   TerrainProfileDefinition,
+  validateTerrainProfile,
 } from '../siege/terrainDefinitions';
 import {
   AuthoredAttack,
@@ -99,10 +101,13 @@ export interface DetailedPhysicsDiagnostics {
 export interface TerrainPhysicsBodyDiagnostics {
   terrainBodyId: string;
   label: string;
+  collisionRole: TerrainCollisionRole;
   shapeKind: TerrainBodyDefinition['shape']['kind'];
   position: Vector2;
   widthPx?: number;
   heightPx?: number;
+  sourceVertices?: Vector2[];
+  bounds: { min: Vector2; max: Vector2 };
   rotationRad: number;
   isStatic: boolean;
   isSensor: boolean;
@@ -116,6 +121,7 @@ export class PhysicsBridge {
   private engine: Matter.Engine;
   private readonly terrainProfile: TerrainProfileDefinition;
   private readonly terrainPhysicsDiagnostics: TerrainPhysicsBodyDiagnostics[] = [];
+  private readonly terrainBodyMap: Map<string, Matter.Body> = new Map();
   private pieceBodyMap: Map<string, Matter.Body> = new Map();
   private pieceTypeMap: Map<string, MaterialType> = new Map();
   private anchorConstraintMap: Map<string, Matter.Constraint> = new Map();
@@ -152,6 +158,10 @@ export class PhysicsBridge {
     levelState: LevelState,
     terrainProfile: TerrainProfileDefinition = FLAT_SANCTUARY_TERRAIN,
   ) {
+    const terrainValidation = validateTerrainProfile(terrainProfile);
+    if (!terrainValidation.valid) {
+      throw new Error(`Invalid terrain profile: ${terrainValidation.errors.join('; ')}`);
+    }
     this.terrainProfile = terrainProfile;
     this.engine = Engine.create({
       enableSleeping: true,
@@ -232,39 +242,72 @@ export class PhysicsBridge {
   private buildSimulationWorld(levelState: LevelState): void {
     const world = this.engine.world;
 
-    // 1. Canonical static terrain. Level 1 currently resolves to the exact legacy bedrock.
+    // 1. Canonical static terrain. Polygon vertices are authored in local body space.
     for (const terrainBody of this.terrainProfile.bodies) {
-      if (terrainBody.shape.kind !== 'RECTANGLE') {
-        throw new Error(
-          `Terrain body ${terrainBody.id} uses unsupported runtime shape ${terrainBody.shape.kind}`,
-        );
-      }
       const label =
         terrainBody.collisionRole === 'BEDROCK'
           ? 'ground_bedrock'
           : `terrain_${terrainBody.id}`;
-      const body = Bodies.rectangle(
-        terrainBody.position.x,
-        terrainBody.position.y,
-        terrainBody.shape.widthPx,
-        terrainBody.shape.heightPx,
-        {
-          angle: terrainBody.rotationRad,
-          isStatic: true,
-          isSensor: false,
-          friction: terrainBody.friction,
-          restitution: terrainBody.restitution,
-          label,
-        },
-      );
+      const bodyOptions: Matter.IChamferableBodyDefinition = {
+        angle: terrainBody.rotationRad,
+        isStatic: true,
+        isSensor: false,
+        friction: terrainBody.friction,
+        restitution: terrainBody.restitution,
+        label,
+      };
+
+      let body: Matter.Body;
+      let sourceVertices: Vector2[] | undefined;
+      let widthPx: number | undefined;
+      let heightPx: number | undefined;
+
+      if (terrainBody.shape.kind === 'RECTANGLE') {
+        widthPx = terrainBody.shape.widthPx;
+        heightPx = terrainBody.shape.heightPx;
+        body = Bodies.rectangle(
+          terrainBody.position.x,
+          terrainBody.position.y,
+          widthPx,
+          heightPx,
+          bodyOptions,
+        );
+      } else {
+        sourceVertices = terrainBody.shape.vertices.map((vertex) => ({ ...vertex }));
+        const cos = Math.cos(terrainBody.rotationRad);
+        const sin = Math.sin(terrainBody.rotationRad);
+        const worldVertices = sourceVertices.map((vertex) => ({
+          x: terrainBody.position.x + vertex.x * cos - vertex.y * sin,
+          y: terrainBody.position.y + vertex.x * sin + vertex.y * cos,
+        }));
+        const centroid = Matter.Vertices.centre(worldVertices as Matter.Vector[]);
+        body = Bodies.fromVertices(
+          centroid.x,
+          centroid.y,
+          [worldVertices as Matter.Vector[]],
+          { ...bodyOptions, angle: 0 },
+          true,
+        );
+        if (body.parts.length > 2) {
+          throw new Error(`Terrain body ${terrainBody.id} decomposed into multiple runtime bodies`);
+        }
+      }
+
+      this.terrainBodyMap.set(terrainBody.id, body);
       Composite.add(world, body);
       this.terrainPhysicsDiagnostics.push({
         terrainBodyId: terrainBody.id,
         label,
+        collisionRole: terrainBody.collisionRole,
         shapeKind: terrainBody.shape.kind,
         position: { ...terrainBody.position },
-        widthPx: terrainBody.shape.widthPx,
-        heightPx: terrainBody.shape.heightPx,
+        widthPx,
+        heightPx,
+        sourceVertices,
+        bounds: {
+          min: { x: body.bounds.min.x, y: body.bounds.min.y },
+          max: { x: body.bounds.max.x, y: body.bounds.max.y },
+        },
         rotationRad: terrainBody.rotationRad,
         isStatic: true,
         isSensor: false,
@@ -601,7 +644,16 @@ export class PhysicsBridge {
     return this.terrainPhysicsDiagnostics.map((entry) => ({
       ...entry,
       position: { ...entry.position },
+      sourceVertices: entry.sourceVertices?.map((vertex) => ({ ...vertex })),
+      bounds: {
+        min: { ...entry.bounds.min },
+        max: { ...entry.bounds.max },
+      },
     }));
+  }
+
+  public getMatterTerrainBodyCount(): number {
+    return this.terrainBodyMap.size;
   }
 
   public getFoundationAssistDiagnostics(): Array<{
@@ -1745,6 +1797,7 @@ export class PhysicsBridge {
     this.timberJoints.clear();
     this.timberJointConstraintMap.clear();
     this.foundationAssists.clear();
+    this.terrainBodyMap.clear();
     this.terrainPhysicsDiagnostics.length = 0;
     this.pieceConditions.clear();
     this.dispersedWispIds.clear();

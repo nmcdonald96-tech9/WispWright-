@@ -58,10 +58,16 @@ test('terrain runtime: Level 1 bedrock Matter body remains byte-equivalent in ma
   assert.deepEqual(diagnostics[0], {
     terrainBodyId: 'terrain_flat_sanctuary_bedrock',
     label: 'ground_bedrock',
+    collisionRole: 'BEDROCK',
     shapeKind: 'RECTANGLE',
     position: { x: 100, y: WORLD_CONFIG.groundY + 100 },
     widthPx: 2600,
     heightPx: 200,
+    sourceVertices: undefined,
+    bounds: {
+      min: { x: -1200, y: WORLD_CONFIG.groundY },
+      max: { x: 1400, y: WORLD_CONFIG.groundY + 200 },
+    },
     rotationRad: 0,
     isStatic: true,
     isSensor: false,
