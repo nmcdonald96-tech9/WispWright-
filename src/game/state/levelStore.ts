@@ -50,6 +50,7 @@ import {
   validatePieceRotationTransaction,
 } from '../math/snapSolver';
 import { LevelDefinition } from '../siege/levelDefinitions';
+import { getTerrainProfile, TerrainProfileDefinition } from '../siege/terrainDefinitions';
 import { resolveRuntimeLevelSelection } from '../siege/runtimeLevelSelection';
 import {
   AuthoritativeTutorialState,
@@ -239,6 +240,10 @@ export class LevelStore {
   public getActiveLevelDefinition(customState?: LevelState): LevelDefinition {
     const target = customState ?? this.state;
     return resolveRuntimeLevelSelection(target?.levelId).definition;
+  }
+
+  public getActiveTerrainProfile(customState?: LevelState): TerrainProfileDefinition {
+    return getTerrainProfile(this.getActiveLevelDefinition(customState).terrainProfileId);
   }
 
   public getLevelConfiguration(): LevelConfiguration {

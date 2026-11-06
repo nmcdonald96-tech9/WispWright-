@@ -9,6 +9,11 @@ import { Vec2 } from '../math/geometry';
 import { shortestSignedAngleDelta } from '../math/snapSolver';
 import { DAMAGE_THRESHOLDS } from '../siege/siegeConfig';
 import {
+  FLAT_SANCTUARY_TERRAIN,
+  TerrainBodyDefinition,
+  TerrainProfileDefinition,
+} from '../siege/terrainDefinitions';
+import {
   AuthoredAttack,
   LevelState,
   MaterialType,
@@ -86,10 +91,31 @@ export interface DetailedPhysicsDiagnostics {
   wispHarmlessContactCount?: number;
   wispDebrisHitCount?: number;
   wispCosmeticOverlapCount?: number;
+  terrainProfileId: TerrainProfileDefinition['terrainProfileId'];
+  terrainBodyCount: number;
+  canonicalBedrockBodyId: string;
+}
+
+export interface TerrainPhysicsBodyDiagnostics {
+  terrainBodyId: string;
+  label: string;
+  shapeKind: TerrainBodyDefinition['shape']['kind'];
+  position: Vector2;
+  widthPx?: number;
+  heightPx?: number;
+  rotationRad: number;
+  isStatic: boolean;
+  isSensor: boolean;
+  friction: number;
+  restitution: number;
+  blocksProjectiles: boolean;
+  blocksConstruction: boolean;
 }
 
 export class PhysicsBridge {
   private engine: Matter.Engine;
+  private readonly terrainProfile: TerrainProfileDefinition;
+  private readonly terrainPhysicsDiagnostics: TerrainPhysicsBodyDiagnostics[] = [];
   private pieceBodyMap: Map<string, Matter.Body> = new Map();
   private pieceTypeMap: Map<string, MaterialType> = new Map();
   private anchorConstraintMap: Map<string, Matter.Constraint> = new Map();
@@ -122,7 +148,11 @@ export class PhysicsBridge {
 
   public diagnostics: DetailedPhysicsDiagnostics;
 
-  constructor(levelState: LevelState) {
+  constructor(
+    levelState: LevelState,
+    terrainProfile: TerrainProfileDefinition = FLAT_SANCTUARY_TERRAIN,
+  ) {
+    this.terrainProfile = terrainProfile;
     this.engine = Engine.create({
       enableSleeping: true,
       positionIterations: 12,
@@ -189,6 +219,10 @@ export class PhysicsBridge {
       wispHarmlessContactCount: 0,
       wispDebrisHitCount: 0,
       wispCosmeticOverlapCount: 0,
+      terrainProfileId: this.terrainProfile.terrainProfileId,
+      terrainBodyCount: this.terrainProfile.bodies.length,
+      canonicalBedrockBodyId:
+        this.terrainProfile.bodies.find((body) => body.collisionRole === 'BEDROCK')?.id ?? '',
     };
 
     this.buildSimulationWorld(levelState);
@@ -198,21 +232,48 @@ export class PhysicsBridge {
   private buildSimulationWorld(levelState: LevelState): void {
     const world = this.engine.world;
 
-    // 1. Static bedrock ground (top surface at y = WORLD_CONFIG.groundY = 780)
-    // Extends across launcher zone, flight corridor, and fortress (x: -1200 to 1400)
-    const ground = Bodies.rectangle(
-      100,
-      WORLD_CONFIG.groundY + 100,
-      2600,
-      200,
-      {
+    // 1. Canonical static terrain. Level 1 currently resolves to the exact legacy bedrock.
+    for (const terrainBody of this.terrainProfile.bodies) {
+      if (terrainBody.shape.kind !== 'RECTANGLE') {
+        throw new Error(
+          `Terrain body ${terrainBody.id} uses unsupported runtime shape ${terrainBody.shape.kind}`,
+        );
+      }
+      const label =
+        terrainBody.collisionRole === 'BEDROCK'
+          ? 'ground_bedrock'
+          : `terrain_${terrainBody.id}`;
+      const body = Bodies.rectangle(
+        terrainBody.position.x,
+        terrainBody.position.y,
+        terrainBody.shape.widthPx,
+        terrainBody.shape.heightPx,
+        {
+          angle: terrainBody.rotationRad,
+          isStatic: true,
+          isSensor: false,
+          friction: terrainBody.friction,
+          restitution: terrainBody.restitution,
+          label,
+        },
+      );
+      Composite.add(world, body);
+      this.terrainPhysicsDiagnostics.push({
+        terrainBodyId: terrainBody.id,
+        label,
+        shapeKind: terrainBody.shape.kind,
+        position: { ...terrainBody.position },
+        widthPx: terrainBody.shape.widthPx,
+        heightPx: terrainBody.shape.heightPx,
+        rotationRad: terrainBody.rotationRad,
         isStatic: true,
-        friction: 0.95,
-        restitution: 0.0,
-        label: 'ground_bedrock',
-      },
-    );
-    Composite.add(world, ground);
+        isSensor: false,
+        friction: terrainBody.friction,
+        restitution: terrainBody.restitution,
+        blocksProjectiles: terrainBody.blocksProjectiles,
+        blocksConstruction: terrainBody.blocksConstruction,
+      });
+    }
 
     // 2. Non-colliding anchor sensor markers
     for (const anchor of levelState.anchors) {
@@ -513,6 +574,34 @@ export class PhysicsBridge {
     }
     this.diagnostics.activeFoundationAssistCount = active;
     this.diagnostics.brokenFoundationAssistCount = broken;
+  }
+
+  public getTerrainProfile(): TerrainProfileDefinition {
+    return {
+      ...this.terrainProfile,
+      bodies: this.getResolvedTerrainBodies(),
+    };
+  }
+
+  public getResolvedTerrainBodies(): TerrainBodyDefinition[] {
+    return this.terrainProfile.bodies.map((body) => ({
+      ...body,
+      position: { ...body.position },
+      shape:
+        body.shape.kind === 'RECTANGLE'
+          ? { ...body.shape }
+          : {
+              ...body.shape,
+              vertices: body.shape.vertices.map((vertex) => ({ ...vertex })),
+            },
+    }));
+  }
+
+  public getTerrainPhysicsDiagnostics(): TerrainPhysicsBodyDiagnostics[] {
+    return this.terrainPhysicsDiagnostics.map((entry) => ({
+      ...entry,
+      position: { ...entry.position },
+    }));
   }
 
   public getFoundationAssistDiagnostics(): Array<{
@@ -1656,6 +1745,7 @@ export class PhysicsBridge {
     this.timberJoints.clear();
     this.timberJointConstraintMap.clear();
     this.foundationAssists.clear();
+    this.terrainPhysicsDiagnostics.length = 0;
     this.pieceConditions.clear();
     this.dispersedWispIds.clear();
     this.processedContacts.clear();

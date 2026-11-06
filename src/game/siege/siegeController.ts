@@ -281,7 +281,7 @@ export class SiegeController {
     this.store.captureSnapshot();
     this.store.recordStabilityTestStarted();
 
-    const tempBridge = new PhysicsBridge(this.store.getState());
+    const tempBridge = new PhysicsBridge(this.store.getState(), this.store.getActiveTerrainProfile());
     const dt = 0.016;
     const steps = Math.max(10, Math.ceil(durationSec / dt));
     for (let i = 0; i < steps; i++) {
@@ -561,7 +561,7 @@ export class SiegeController {
     if (this.physicsBridge) {
       this.physicsBridge.teardown();
     }
-    this.physicsBridge = new PhysicsBridge(state);
+    this.physicsBridge = new PhysicsBridge(state, this.store.getActiveTerrainProfile());
 
     // 5. Initialize siege run with current distance preset
     this.currentAttackIndex = 0;
@@ -866,7 +866,7 @@ export class SiegeController {
     if (this.physicsBridge) {
       this.physicsBridge.teardown();
     }
-    this.physicsBridge = new PhysicsBridge(state);
+    this.physicsBridge = new PhysicsBridge(state, this.store.getActiveTerrainProfile());
 
     this.currentAttackIndex = 1;
     this.currentAttackIndex = this.reinforcementAfterAttackIndex + 1;
